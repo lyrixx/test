@@ -1,0 +1,5 @@
+tests:
+    "Pages should be fast enough":
+        path: "/.*"
+        assertions:
+            - "main.wall_time < 100ms"
