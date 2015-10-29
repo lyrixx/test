@@ -1,0 +1,12 @@
+parameters:
+    database_driver:   pdo_mysql
+    database_host:     127.0.0.1
+    database_port:     ~
+    database_name:     fortunes
+    database_user:     root
+    database_password: ~
+
+    locale:            en
+    secret:            ThisTokenIsSoSecretDontNeedToChangeIt
+
+    security.user.password: Only needed if you set up security. See README.md
