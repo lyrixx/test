@@ -1,6 +1,6 @@
 name: test
 
-type: php
+type: php:5.6
 build:
     flavor: symfony
 
@@ -24,9 +24,9 @@ hooks:
       app/console --env=prod cache:clear
       app/console --env=prod doctrine:schema:update --force -n
 
-# runtime:
-#   extensions:
-#     - name: blackfire
-#       configuration:
-#         server_id: "adad4e6a-00b1-4ff2-b4b9-3458fa6680b6"
-#         server_token: "94505faad56a8c884d6cceab45186fb0115e481b1b1b976b57ae7259c21a77a7"
+runtime:
+  extensions:
+    - name: blackfire
+      configuration:
+        server_id: "f0aba685-caaa-4f75-af60-92c0bac53344"
+        server_token: "b226642844e29b86168a504902f09f1fa28098c7b7919fc5202fc859e6d7dea5"
