@@ -1,5 +1,9 @@
 tests:
-    "Pages should be fast enough":
-        path: "/.*"
+    Pages should be fast enough:
+        path: /.*
         assertions:
-            - "main.wall_time < 100ms"
+            - main.wall_time < 100ms
+
+scenarios:
+    Homepage:
+        - /
