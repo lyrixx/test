@@ -38,7 +38,6 @@ foreach ($data as list('id' => $id, 'name' => $name)) {
 foreach ($data as ['id' => $id, 'name' => $name]) {
 }
 
-
 class ConstantVisibility
 {
     const PUBLIC_CONST_A = 1;
@@ -53,6 +52,5 @@ try {
     throw new RuntimeException();
 } catch (RuntimeException | LogicException $e) {
 }
-
 
 $negativeOffset = 'abcdef'[-2];
