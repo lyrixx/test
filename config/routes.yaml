@@ -1,0 +1,5 @@
+stripe:
+    resource:
+        path: ../src/Billing/Stripe/Controller/
+        namespace: App\Billing\Stripe\Controller
+    type: attribute

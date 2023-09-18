@@ -1,0 +1,9 @@
+security:
+    firewalls:
+        api_stripe:
+            pattern:    ^/stripe/webhook$
+            methods:    [ GET, POST ]
+            stateless:  true
+            lazy:       false
+            custom_authenticators:
+                - App\Security\Authenticator\StripeAuthenticator
