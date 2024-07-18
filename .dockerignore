@@ -1,0 +1,6 @@
+/.git
+/.gitignore
+/.vagrant
+/Makefile
+/README.md
+/Vagrantfile
