@@ -9,16 +9,19 @@
         "ext-iconv": "*",
         "symfony/console": "7.2.*",
         "symfony/dotenv": "7.2.*",
-        "symfony/flex": "^2",
+        "symfony/flex": "^2.5",
         "symfony/framework-bundle": "7.2.*",
         "symfony/runtime": "7.2.*",
         "symfony/yaml": "7.2.*"
     },
     "require-dev": {
+        "phpstan/extension-installer": "^1.4.3",
+        "phpstan/phpstan-symfony": "^2.0.4"
     },
     "config": {
         "allow-plugins": {
             "php-http/discovery": true,
+            "phpstan/extension-installer": true,
             "symfony/flex": true,
             "symfony/runtime": true
         },
