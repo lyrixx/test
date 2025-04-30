@@ -1,0 +1,6 @@
+{
+    "require": {
+        "bopoda/robots-txt-parser": "^2.4",
+        "symfony/dom-crawler": "^7.2"
+    }
+}
