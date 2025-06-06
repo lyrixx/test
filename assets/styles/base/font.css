@@ -1,0 +1,15 @@
+@font-face {
+    font-family: 'Noto Serif';
+    font-style: normal;
+    font-weight: 400 700;
+    src: url('../../fonts/noto-serif-vf.woff2') format('woff2-variations');
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Open Sans';
+    font-style: normal;
+    font-weight: 400 700;
+    src: url('../../fonts/open-sans-vf.woff2') format('woff2-variations');
+    font-display: swap;
+}
