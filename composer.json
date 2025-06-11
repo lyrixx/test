@@ -1,0 +1,11 @@
+{
+    "require": {
+        "symfony/dependency-injection": "^7.3",
+        "symfony/config": "^7.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}
