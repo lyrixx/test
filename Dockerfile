@@ -1,5 +1,5 @@
 FROM alpine
 
-COPY . /foobar
+COPY app /app
 
-WORKDIR /foobar
+WORKDIR /app
