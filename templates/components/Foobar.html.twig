@@ -1,0 +1,31 @@
+<div{{attributes}}>
+    <div class="count">
+        {{ computed.pagination.getTotalItemCount }}
+    </div>
+    <table>
+        <tr>
+            {# sorting of properties based on query components #}
+            <th>{{ knp_pagination_sortable(computed.pagination, 'Id', 'a.id') }}</th>
+            <th {% if computed.pagination.isSorted('a.title') %} class="sorted" {% endif %}>
+                {{ knp_pagination_sortable(computed.pagination, 'Title', 'a.title') }}
+            </th>
+            <th {% if computed.pagination.isSorted(['a.publishedAt']) %} class="sorted" {% endif %}>
+                {{ knp_pagination_sortable(computed.pagination, 'Release', ['a.publishedAt']) }}
+            </th>
+        </tr>
+
+        {# table body #}
+        {% for article in computed.pagination %}
+            <tr {% if loop.index is odd %} class="color" {% endif %}>
+                <td>{{ article.id }}</td>
+                <td>{{ article.title }}</td>
+                <td>{{ article.publishedAt | date('Y-m-d') }},
+                    {{ article.publishedAt | date('H:i:s') }}</td>
+            </tr>
+        {% endfor %}
+    </table>
+    {# display navigation #}
+    <div class="navigation">
+        {{ knp_pagination_render(computed.pagination) }}
+    </div>
+</div>
