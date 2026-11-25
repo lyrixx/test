@@ -1,0 +1,9 @@
+/castor/vendor/
+/castor/castor.composer.lock.bak
+.castor/vendor/
+.castor.stub.php
+/plugins/*/vendor/
+/plugins/*/composer.lock
+/plugins/*/castor.composer.lock
+/apps/*/castor.composer.lock
+/.claude/

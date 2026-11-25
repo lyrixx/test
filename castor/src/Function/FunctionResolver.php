@@ -246,7 +246,7 @@ final readonly class FunctionResolver
      */
     private function resolveListeners(\ReflectionFunction $reflectionFunction): iterable
     {
-        $attributes = $reflectionFunction->getAttributes(AsListener::class);
+        $attributes = $reflectionFunction->getAttributes(AsListener::class, \ReflectionAttribute::IS_INSTANCEOF);
 
         foreach ($attributes as $attribute) {
             /** @var AsListener $listenerAttribute */

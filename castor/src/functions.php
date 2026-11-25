@@ -487,13 +487,19 @@ function mount(string $path, ?string $namespacePrefix = null, ?string $file = nu
  * autoloads, or the features it declares in the "extra.castor.features"
  * section of its composer.json file.
  *
- * @param string                   $package  The name of the package, like "vendor/package"
- * @param string|list<string>|null $features The features to load, instead of its "default" one
- * @param ?string                  $prefix   Prepended to the namespace of its tasks, like "app" for "app:build"
+ * POC: only its AsExposed* tasks, contexts and listeners are exposed, from its
+ * castor.php and from the files it autoloads. It can be registered several
+ * times, with other prefixes or working directories.
+ *
+ * @param string                   $package          The name of the package, like "vendor/package"
+ * @param string|list<string>|null $features         The features to load, instead of its "default" one
+ * @param ?string                  $prefix           Prepended to the namespace of its tasks, like "app" for "app:build"
+ * @param ?string                  $workingDirectory The working directory of its tasks, relative to the project.
+ *                                                   Defaults to the one of the context
  */
-function register_plugin(string $package, string|array|null $features = null, ?string $prefix = null): void
+function register_plugin(string $package, string|array|null $features = null, ?string $prefix = null, ?string $workingDirectory = null): void
 {
-    Container::get()->pluginRegistrar->register($package, $features, $prefix);
+    Container::get()->pluginRegistrar->register($package, $features, $prefix, $workingDirectory);
 }
 
 /**

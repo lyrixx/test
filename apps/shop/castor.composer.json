@@ -1,0 +1,16 @@
+{
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../../plugins/qa"
+        },
+        {
+            "type": "path",
+            "url": "../../plugins/docker"
+        }
+    ],
+    "require": {
+        "acme/docker": "*@dev",
+        "acme/qa": "*@dev"
+    }
+}

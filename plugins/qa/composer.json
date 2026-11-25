@@ -1,0 +1,27 @@
+{
+    "name": "acme/qa",
+    "description": "POC: a plugin that is a regular Castor application, with a castor.php, internal tasks and exposed tasks.",
+    "type": "castor-plugin",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Acme\\Qa\\": "src/"
+        },
+        "files": [
+            "src/functions.php"
+        ]
+    },
+    "require": {
+        "sebastian/diff": "^7.0"
+    },
+    "require-dev": {
+        "acme/docker": "*@dev",
+        "michelf/php-markdown": "^2.0"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../docker"
+        }
+    ]
+}

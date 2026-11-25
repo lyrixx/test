@@ -49,7 +49,7 @@ final class ComposerCommand extends Command
         // Default to the root directory (so someone can do a composer init by example)
         $file = $this->composer->findComposerJsonFile($this->rootDir) ?? $this->rootDir . '/castor.composer.json';
 
-        $vendorDirectory = $this->rootDir . '/' . Composer::VENDOR_DIR;
+        $vendorDirectory = Composer::getVendorDirectory($this->rootDir);
         $tokens = $this->getRawTokens($input, false);
 
         if (\in_array('init', $tokens)) {

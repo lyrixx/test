@@ -1,0 +1,11 @@
+{
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../../plugins/orm"
+        }
+    ],
+    "require": {
+        "acme/orm": "*@dev"
+    }
+}

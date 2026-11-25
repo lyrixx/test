@@ -2,6 +2,10 @@
 
 namespace Castor;
 
+use Castor\Attribute\AsExposedContext;
+use Castor\Attribute\AsExposedContextGenerator;
+use Castor\Attribute\AsExposedListener;
+use Castor\Attribute\AsExposedTask;
 use Castor\Console\Application;
 use Castor\Console\Command\CompileCommand;
 use Castor\Console\Command\ComposerCommand;
@@ -14,6 +18,7 @@ use Castor\Console\Command\RepackCommand;
 use Castor\Console\Command\SelfUpdateCommand;
 use Castor\Console\Input\CommandLine;
 use Castor\Console\Output\VerbosityLevel;
+use Castor\Descriptor\DescriptorsCollection;
 use Castor\Event\AfterBootEvent;
 use Castor\Event\BeforeBootEvent;
 use Castor\Event\FunctionsResolvedEvent;
@@ -96,6 +101,17 @@ final class Kernel extends AbstractKernel
     private array $skippedPackages = [];
 
     private bool $chdirDeprecationTriggered = false;
+
+    /** POC: the mount whose entrypoint is being loaded */
+    private ?Mount $loadingMount = null;
+
+    /**
+     * POC: the functions and the classes of the plugins registered, by name,
+     * for their next registrations: PHP defines a function only once.
+     *
+     * @var array<string, list<\ReflectionFunction|\ReflectionClass<object>>>
+     */
+    private array $pluginDefinitions = [];
 
     public function __construct(
         string $environment,
@@ -205,6 +221,15 @@ final class Kernel extends AbstractKernel
     public function addSkippedPackage(string $package): void
     {
         $this->skippedPackages[$package] = true;
+    }
+
+    /**
+     * POC: whether the entrypoint of a plugin registered by the project is
+     * being loaded.
+     */
+    public function isLoadingPlugin(): bool
+    {
+        return $this->loadingMount?->plugin ?? false;
     }
 
     public function configureContainer(ContainerConfigurator $c): void
@@ -412,6 +437,34 @@ final class Kernel extends AbstractKernel
     {
         $c = Container::get();
 
+        if ($mount->repeated && null !== $mount->package) {
+            $definitions = $this->pluginDefinitions[$mount->package] ?? [];
+        } else {
+            $definitions = $this->loadDefinitions($mount);
+        }
+
+        $descriptorsCollection = $c->functionResolver->resolveFunctions($definitions);
+
+        if ($mount->plugin) {
+            $descriptorsCollection = self::keepExposed($descriptorsCollection, $mount->repeated);
+        }
+
+        foreach ($descriptorsCollection->getDefinitions() as $definition) {
+            if (isset($this->notImportedPackageDefinitions[$definition])) {
+                $this->notImportedPackages[$this->notImportedPackageDefinitions[$definition]] = true;
+            }
+        }
+
+        $this->applyMount($mount, $descriptorsCollection, $output);
+    }
+
+    /**
+     * @return list<\ReflectionFunction|\ReflectionClass<object>>
+     */
+    private function loadDefinitions(Mount $mount): array
+    {
+        $c = Container::get();
+
         $previousFunctions = get_defined_functions()['user'];
         $previousClasses = get_declared_classes();
 
@@ -431,12 +484,16 @@ final class Kernel extends AbstractKernel
         $previousFunctions = get_defined_functions()['user'];
         $previousClasses = get_declared_classes();
 
+        $this->loadingMount = $mount;
+
         try {
             $this->requireEntrypoint($mount, $c->importer);
         } catch (CouldNotFindEntrypointException $e) {
             if (!$mount->allowEmptyEntrypoint) {
                 throw $e;
             }
+        } finally {
+            $this->loadingMount = null;
         }
 
         $entrypointDefinitions = $this->getDefinitionsSince($previousFunctions, $previousClasses);
@@ -450,15 +507,36 @@ final class Kernel extends AbstractKernel
                 $definitions = [...($this->pendingPackageDefinitions[$mount->package] ?? []), ...$definitions];
                 unset($this->pendingPackageDefinitions[$mount->package]);
             }
-        }
 
-        $descriptorsCollection = $c->functionResolver->resolveFunctions($definitions);
-
-        foreach ($descriptorsCollection->getDefinitions() as $definition) {
-            if (isset($this->notImportedPackageDefinitions[$definition])) {
-                $this->notImportedPackages[$this->notImportedPackageDefinitions[$definition]] = true;
+            if ($mount->plugin) {
+                $this->pluginDefinitions[$mount->package] = $definitions;
             }
         }
+
+        return $definitions;
+    }
+
+    /**
+     * POC: a plugin only exposes its AsExposed* tasks, contexts and listeners.
+     * Its next registrations only add its tasks again, with another prefix or
+     * working directory: its listeners would run twice, and its contexts
+     * would clash.
+     */
+    private static function keepExposed(DescriptorsCollection $collection, bool $tasksOnly): DescriptorsCollection
+    {
+        return new DescriptorsCollection(
+            $tasksOnly ? [] : array_values(array_filter($collection->contextDescriptors, static fn ($descriptor): bool => $descriptor->contextAttribute instanceof AsExposedContext)),
+            $tasksOnly ? [] : array_values(array_filter($collection->contextGeneratorDescriptors, static fn ($descriptor): bool => $descriptor->contextAttribute instanceof AsExposedContextGenerator)),
+            $tasksOnly ? [] : array_values(array_filter($collection->listenerDescriptors, static fn ($descriptor): bool => $descriptor->asListener instanceof AsExposedListener)),
+            array_values(array_filter($collection->taskDescriptors, static fn ($descriptor): bool => $descriptor->taskAttribute instanceof AsExposedTask)),
+            // A Symfony command is never exposed
+            [],
+        );
+    }
+
+    private function applyMount(Mount $mount, DescriptorsCollection $descriptorsCollection, OutputInterface $output): void
+    {
+        $c = Container::get();
 
         // Apply mounts
         foreach ($descriptorsCollection->taskDescriptors as $taskDescriptor) {
@@ -546,9 +624,9 @@ final class Kernel extends AbstractKernel
             } elseif (isset($this->skippedPackages[$package])) {
                 continue;
             } else {
-                // Castor 2.0 will only load them when the package is registered
-                $mountDefinitions[] = $definition;
-                $this->notImportedPackageDefinitions[$definition] = $package;
+                // POC: requiring a package only gives its functions and
+                // classes, as from Castor 2.0
+                continue;
             }
         }
 

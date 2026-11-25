@@ -1,0 +1,17 @@
+{
+    "name": "acme/orm",
+    "description": "POC: a library first, like doctrine/orm, which also ships Castor tasks. Its own requirements are not compatible with the packages bundled with Castor.",
+    "type": "castor-plugin",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Acme\\Orm\\": "src/"
+        }
+    },
+    "require": {
+        "symfony/console": "^7.4"
+    },
+    "require-dev": {
+        "symfony/yaml": "^7.4"
+    }
+}

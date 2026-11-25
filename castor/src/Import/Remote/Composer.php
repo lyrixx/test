@@ -29,6 +29,15 @@ class Composer
      */
     public const CASTOR_PLUGIN_TYPE = 'castor-plugin';
 
+    /**
+     * POC: the repository of a Castor plugin is a plain Composer project, with
+     * its composer.json, its composer.lock and its vendor/ directory, dev
+     * requirements included, and the packages bundled with Castor ignored,
+     * like "composer install" does. Set it to false to get the behavior of
+     * #934 back (.castor/vendor/, castor.composer.lock, no require-dev).
+     */
+    public const PLUGIN_REPOSITORY_USES_PLAIN_COMPOSER = true;
+
     /** Whether the remote packages were needed, but not installed, by a shell completion */
     private bool $skippedForCompletion = false;
 
@@ -68,8 +77,9 @@ class Composer
             return;
         }
 
-        $composerLockFile = \dirname($composerJsonFile) . '/castor.composer.lock';
-        $vendorDirectory = $entrypointDirectory . '/' . self::VENDOR_DIR;
+        $plainComposer = self::usesPlainComposer($composerJsonFile);
+        $composerLockFile = \dirname($composerJsonFile) . ($plainComposer ? '/composer.lock' : '/castor.composer.lock');
+        $vendorDirectory = self::getVendorDirectory($entrypointDirectory);
 
         if (!$update && $this->isInstalled($vendorDirectory, $composerLockFile)) {
             return;
@@ -98,7 +108,7 @@ class Composer
         }
 
         $args = [$update ? 'update' : 'install'];
-        $outdatedPackages = $update ? [] : $this->getOutdatedBundledPackagesInLock($composerJsonFile, $composerLockFile);
+        $outdatedPackages = $update || $plainComposer ? [] : $this->getOutdatedBundledPackagesInLock($composerJsonFile, $composerLockFile);
 
         if ($outdatedPackages) {
             // The lock was written by another Castor version, or by Composer
@@ -147,6 +157,20 @@ class Composer
     }
 
     /**
+     * The vendor directory of the remote packages of a directory: the
+     * vendor/ directory of the repository of a Castor plugin, see
+     * PLUGIN_REPOSITORY_USES_PLAIN_COMPOSER.
+     */
+    public static function getVendorDirectory(string $directory): string
+    {
+        if (!file_exists($directory . '/castor.composer.json') && !file_exists($directory . '/.castor/castor.composer.json') && self::usesPlainComposer($directory . '/composer.json')) {
+            return $directory . '/vendor';
+        }
+
+        return $directory . '/' . self::VENDOR_DIR;
+    }
+
+    /**
      * The Composer file listing the remote packages of a directory: its
      * castor.composer.json, or the composer.json of the Castor plugin the
      * directory is the repository of.
@@ -157,7 +181,7 @@ class Composer
             return $file;
         }
 
-        if ($this->isCastorPlugin($file = $directory . '/composer.json')) {
+        if (self::isCastorPlugin($file = $directory . '/composer.json')) {
             return $file;
         }
 
@@ -272,8 +296,9 @@ class Composer
             $_SERVER['COMPOSER_BIN_DIR'] = $binDir;
         }
 
-        $useBundledPackages = $useBundledPackages && $this->areBundledPackagesEnabled($composerJsonFilePath);
-        $castorPluginLockFile = $this->isCastorPlugin($composerJsonFilePath) ? \dirname($composerJsonFilePath) . '/castor.composer.lock' : null;
+        $plainComposer = self::usesPlainComposer($composerJsonFilePath);
+        $useBundledPackages = $useBundledPackages && !$plainComposer && $this->areBundledPackagesEnabled($composerJsonFilePath);
+        $castorPluginLockFile = !$plainComposer && self::isCastorPlugin($composerJsonFilePath) ? \dirname($composerJsonFilePath) . '/castor.composer.lock' : null;
 
         $composerApplication = new ComposerApplication($this->bundledPackages, $useBundledPackages, $castorPluginLockFile);
         $composerApplication->setAutoExit(false);
@@ -403,7 +428,7 @@ class Composer
         $lock = json_decode((string) file_get_contents($composerLockFile), true, 512, \JSON_THROW_ON_ERROR);
         $composerJson = json_decode((string) file_get_contents($composerJsonFile), true, 512, \JSON_THROW_ON_ERROR);
 
-        if (\is_array($composerJson) && $this->isCastorPlugin($composerJsonFile)) {
+        if (\is_array($composerJson) && self::isCastorPlugin($composerJsonFile)) {
             // Left out of the remote packages, see ComposerApplication
             unset($composerJson['require-dev']);
         }
@@ -415,7 +440,12 @@ class Composer
      * Whether the file is the composer.json of a Castor plugin, which also
      * lists its remote packages in its own repository.
      */
-    private function isCastorPlugin(string $composerJsonFile): bool
+    private static function usesPlainComposer(string $composerJsonFile): bool
+    {
+        return self::PLUGIN_REPOSITORY_USES_PLAIN_COMPOSER && self::isCastorPlugin($composerJsonFile);
+    }
+
+    private static function isCastorPlugin(string $composerJsonFile): bool
     {
         if ('composer.json' !== basename($composerJsonFile) || !file_exists($composerJsonFile)) {
             return false;

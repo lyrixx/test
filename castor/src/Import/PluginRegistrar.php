@@ -24,10 +24,10 @@ class PluginRegistrar
     public const FEATURES_EXTRA_KEY = 'features';
 
     /**
-     * The plugins registered, by name, with their prefix and the features
-     * already loaded.
+     * The plugins registered, by name, with the features already loaded, and
+     * their registrations, by prefix and working directory.
      *
-     * @var array<string, array{prefix: ?string, features: array<string, true>}>
+     * @var array<string, array{features: array<string, true>, registrations: array<string, true>}>
      */
     private array $plugins = [];
 
@@ -35,13 +35,14 @@ class PluginRegistrar
         private readonly Composer $composer,
         private readonly InstalledPackages $installedPackages,
         private readonly Kernel $kernel,
+        private readonly string $rootDir,
     ) {
     }
 
     /**
      * @param string|list<string>|null $features
      */
-    public function register(string $package, string|array|null $features = null, ?string $prefix = null): void
+    public function register(string $package, string|array|null $features = null, ?string $prefix = null, ?string $workingDirectory = null): void
     {
         if (str_contains($package, '://')) {
             throw new \InvalidArgumentException(\sprintf('The plugin "%s" must be the name of a package, like "vendor/package", without "%s".', $package, strstr($package, '://', true) . '://'));
@@ -51,15 +52,51 @@ class PluginRegistrar
             throw new \InvalidArgumentException(\sprintf('The plugin "%s" must be the name of a package, like "vendor/package".', $package));
         }
 
+        // POC: only the project registers plugins. A plugin registering another
+        // one in its castor.php does it for its own repository, like for a
+        // plugin of its require-dev, that the projects using it do not have.
+        if ($this->kernel->isLoadingPlugin()) {
+            return;
+        }
+
         $features = $this->normalizeFeatures($package, $features);
 
-        if (isset($this->plugins[$package]) && $this->plugins[$package]['prefix'] !== $prefix) {
-            throw new ImportError(\sprintf('The plugin "%s" is already registered %s, it cannot be registered %s too: the tasks of a package are only loaded once.', $package, self::describePrefix($this->plugins[$package]['prefix']), self::describePrefix($prefix)));
+        if (null !== $workingDirectory) {
+            $workingDirectory = Path::makeAbsolute($workingDirectory, $this->rootDir);
+
+            if (!is_dir($workingDirectory)) {
+                throw new ImportError(\sprintf('The working directory "%s" of the plugin "%s" does not exist.', $workingDirectory, $package));
+            }
         }
 
         if (!$packageDirectory = $this->composer->findInstalledPackage($package)) {
             // The remote packages are disabled, but their autoloader may be loaded
             $this->kernel->addSkippedPackage($package);
+
+            return;
+        }
+
+        // POC: a plugin can be registered several times, with other prefixes
+        // or working directories, like once per application of a monorepo
+        $registration = $prefix . "\0" . $workingDirectory;
+
+        if (isset($this->plugins[$package])) {
+            if (isset($this->plugins[$package]['registrations'][$registration])) {
+                return;
+            }
+
+            $this->plugins[$package]['registrations'][$registration] = true;
+
+            $this->kernel->addMount(new Mount(
+                $packageDirectory,
+                allowEmptyEntrypoint: true,
+                namespacePrefix: $prefix,
+                allowRemotePackage: false,
+                workingDirectory: $workingDirectory,
+                package: $package,
+                plugin: true,
+                repeated: true,
+            ));
 
             return;
         }
@@ -74,15 +111,11 @@ class PluginRegistrar
             }
         }
 
-        $this->plugins[$package] ??= ['prefix' => $prefix, 'features' => []];
+        $this->plugins[$package] = ['features' => [], 'registrations' => [$registration => true]];
         $files = [];
         $exposeAutoload = false;
 
         foreach ($features as $feature) {
-            if (isset($this->plugins[$package]['features'][$feature])) {
-                continue;
-            }
-
             $this->plugins[$package]['features'][$feature] = true;
 
             if (!isset($declaredFeatures[$feature])) {
@@ -97,18 +130,17 @@ class PluginRegistrar
             }
         }
 
-        if (!$files && !$exposeAutoload) {
-            return;
-        }
-
         $this->kernel->addMount(new Mount(
             $packageDirectory,
             allowEmptyEntrypoint: true,
             namespacePrefix: $prefix,
             allowRemotePackage: false,
+            workingDirectory: $workingDirectory,
             package: $package,
-            files: array_keys($files),
+            // POC: without features, the castor.php of the plugin is its entrypoint, like for any application
+            files: $files ? array_keys($files) : null,
             exposeAutoload: $exposeAutoload,
+            plugin: true,
         ));
     }
 
@@ -247,10 +279,5 @@ class PluginRegistrar
         }
 
         return $files;
-    }
-
-    private static function describePrefix(?string $prefix): string
-    {
-        return null === $prefix ? 'without prefix' : \sprintf('with the prefix "%s"', $prefix);
     }
 }

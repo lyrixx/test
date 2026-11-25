@@ -61,7 +61,7 @@ class ApplicationFactory
             // "--castor-file" option instead of looking for a castor file from the directory castor
             // was started in. The working directory of the context does not: the tasks still run
             // where castor was started from.
-            PathHelper::initialize($rootDir, $rootDir . '/' . Composer::VENDOR_DIR, $detectedRootDir ?? $currentDir);
+            PathHelper::initialize($rootDir, Composer::getVendorDirectory($rootDir), $detectedRootDir ?? $currentDir);
         }
 
         $kernel = new Kernel('dev', true, $rootDir, $hasCastorFile, $castorFilePath, $repacked);

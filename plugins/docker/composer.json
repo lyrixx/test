@@ -1,0 +1,15 @@
+{
+    "name": "acme/docker",
+    "description": "POC: a plugin without castor.php, whose tasks are in the files it autoloads, like castor-php/docker.",
+    "type": "castor-plugin",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Acme\\Docker\\": "src/"
+        },
+        "files": [
+            "src/functions.php",
+            "src/tasks.php"
+        ]
+    }
+}
