@@ -1,0 +1,5 @@
+In castor.php line XXXX:
+
+  The path "composer://invalid-package-name" must be formatted like this: "composer://<organization>/<repository>".
+
+

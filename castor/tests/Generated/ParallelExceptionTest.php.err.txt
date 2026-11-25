@@ -1,0 +1,23 @@
+In exception.php line XXXX:
+
+  This is an exception
+
+
+parallel:exception
+
+In exception.php line XXXX:
+
+ [ERROR] The following process did not finish successfully (exit code XX):
+
+exit 1
+
+ // Re-run the command with the -v option to see more details.
+
+
+In exception.php line XXXX:
+
+  One or more exceptions were thrown in parallel.
+
+
+parallel:exception
+

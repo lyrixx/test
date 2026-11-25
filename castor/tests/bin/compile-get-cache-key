@@ -1,0 +1,34 @@
+#!/usr/bin/env php
+<?php
+
+require __DIR__ . '/../../vendor/autoload.php';
+
+use Castor\Console\Command\CompileCommand;
+use Castor\Helper\PlatformHelper;
+use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+
+$command = (new class() extends CompileCommand {
+        public function __construct() {
+            Command::__construct();
+        }}
+    )
+    ->setCode(Closure::bind(
+        function(InputInterface $input, OutputInterface $output): int {
+            $output->write( PlatformHelper::getDefaultCacheDirectory() . '/castor-php-static-compiler/' . $this->generatePHPBuildCacheKey($input));
+
+            return 0;
+        },
+        null,
+        CompileCommand::class
+    ))
+;
+
+(new Application())
+    ->addCommand($command)
+    ->getApplication()
+    ->setDefaultCommand($command->getName(), true)
+    ->run()
+;

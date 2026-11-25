@@ -1,0 +1,27 @@
+{
+  "base-path": "../../",
+  "files-bin": [
+    "tools/watcher/bin/watcher-linux-amd64",
+    "tools/watcher/bin/watcher-windows.exe"
+  ],
+  "finder-bin": [
+    {
+      "name": "/.*\\.exe|.*\\.dll/",
+      "in": "vendor/jolicode/jolinotif/bin"
+    }
+  ],
+  "blacklist": [
+    "castor",
+    "Test",
+    "tools",
+    "vendor/symfony/http-foundation"
+  ],
+  "compactors": [
+    "KevinGH\\Box\\Compactor\\Php"
+  ],
+  "annotations": false,
+  "compression": "GZ",
+  "check-requirements": false,
+  "main": "bin/castor",
+  "output": "tools/phar/build/castor.windows-amd64.phar"
+}

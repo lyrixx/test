@@ -1,0 +1,9 @@
+CHANGELOG.md
+README.md
+.cache
+build/
+doc/
+site/
+overrides/partials/jolicode-footer.html
+overrides/partials/version.html
+__pycache__/

@@ -1,0 +1,716 @@
+<?php
+
+namespace Castor;
+
+use Castor\Console\Application;
+use Castor\Console\Command\CompileCommand;
+use Castor\Console\Command\ComposerCommand;
+use Castor\Console\Command\DebugCommand;
+use Castor\Console\Command\ExecuteCommand;
+use Castor\Console\Command\InitCommand;
+use Castor\Console\Command\LlmConfigureCommand;
+use Castor\Console\Command\LlmDebugCommand;
+use Castor\Console\Command\RepackCommand;
+use Castor\Console\Command\SelfUpdateCommand;
+use Castor\Console\Input\CommandLine;
+use Castor\Console\Output\VerbosityLevel;
+use Castor\Event\AfterBootEvent;
+use Castor\Event\BeforeBootEvent;
+use Castor\Event\FunctionsResolvedEvent;
+use Castor\Exception\CouldNotFindEntrypointException;
+use Castor\Helper\PlatformHelper;
+use Castor\Import\Importer;
+use Castor\Import\Mount;
+use Castor\Import\Remote\Composer;
+use Castor\Monolog\Processor\ProcessProcessor;
+use Joli\JoliNotif\DefaultNotifier;
+use Monolog\Logger;
+use Psr\Cache\CacheItemPoolInterface;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\Cache\Adapter\FilesystemAdapter;
+use Symfony\Component\Console\ConsoleEvents;
+use Symfony\Component\Console\Event\ConsoleErrorEvent;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\Console\Terminal;
+use Symfony\Component\DependencyInjection\ContainerInterface;
+use Symfony\Component\DependencyInjection\Kernel\AbstractKernel;
+use Symfony\Component\DependencyInjection\Kernel\KernelTrait;
+use Symfony\Component\DependencyInjection\Kernel\ServicesBundle;
+use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
+use Symfony\Component\ErrorHandler\ErrorHandler;
+use Symfony\Component\ErrorHandler\ErrorRenderer\FileLinkFormatter;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\Filesystem\Exception\IOExceptionInterface;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\HttpClient\HttpClient;
+use Symfony\Component\String\Slugger\AsciiSlugger;
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+
+use function Symfony\Component\DependencyInjection\Loader\Configurator\service;
+
+/** @internal */
+final class Kernel extends AbstractKernel
+{
+    use KernelTrait {
+        getKernelParameters as private getDefaultKernelParameters;
+    }
+
+    /**
+     * @var list<Mount>
+     */
+    private array $mounts = [];
+
+    /**
+     * The functions and the classes of the packages imported, waiting for the
+     * mount of their package, by package: the files a package autoloads are
+     * loaded with the vendor directory, before the castor.php importing it.
+     *
+     * @var array<string, list<\ReflectionFunction|\ReflectionClass<object>>>
+     */
+    private array $pendingPackageDefinitions = [];
+
+    /** @var array<string, true> The packages loaded by register_plugin(), or by import() or mount(), by name */
+    private array $importedPackages = [];
+
+    /**
+     * The functions and the classes loaded although no register_plugin() nor
+     * import() nor mount() asked for their package, with the name of the package.
+     *
+     * @var \WeakMap<\ReflectionFunction|\ReflectionClass<object>, string>
+     */
+    private \WeakMap $notImportedPackageDefinitions;
+
+    /**
+     * The packages whose tasks, contexts or listeners are loaded although no
+     * register_plugin() nor import() nor mount() asked for them, by name.
+     *
+     * @var array<string, true>
+     */
+    private array $notImportedPackages = [];
+
+    /** @var array<string, true> The plugins registered while the remote packages are disabled, by name */
+    private array $skippedPackages = [];
+
+    private bool $chdirDeprecationTriggered = false;
+
+    public function __construct(
+        string $environment,
+        bool $debug,
+        private readonly string $rootDir,
+        private readonly bool $hasCastorFile,
+        private readonly ?string $castorFilePath,
+        private readonly bool $repacked,
+    ) {
+        parent::__construct($environment, $debug);
+
+        $this->notImportedPackageDefinitions = new \WeakMap();
+    }
+
+    public function getProjectDir(): string
+    {
+        // The default implementation auto-detects the project dir from the kernel class
+        // file location, which would resolve to Castor's own install dir (or the phar),
+        // not the user's project.
+        return $this->rootDir;
+    }
+
+    public function getCacheDir(): string
+    {
+        return (string) (getenv('CASTOR_CACHE_DIR') ?: PlatformHelper::getDefaultCacheDirectory());
+    }
+
+    public function getLogDir(): ?string
+    {
+        // The default implementation returns "{projectDir}/var/log" (or APP_LOG_DIR from
+        // the environment), i.e. a directory inside the user's project, while Castor
+        // never writes logs there. Null keeps "kernel.logs_dir" out of the parameters.
+        return null;
+    }
+
+    public function getShareDir(): ?string
+    {
+        // Castor has no share-dir concept. The default implementation falls back to the
+        // cache dir or the APP_SHARE_DIR env var, and since Castor often runs inside a
+        // Symfony app, the user's APP_* env vars would leak into the kernel parameters.
+        return null;
+    }
+
+    public function boot(): void
+    {
+        // AbstractKernel::boot() unconditionally sets SHELL_VERBOSITY=3 in debug mode,
+        // which would make all console output verbose. Castor manages verbosity via
+        // its own -v flag, so we restore the original value after boot.
+        $shellVerbosity = getenv('SHELL_VERBOSITY');
+
+        parent::boot();
+
+        if (false === $shellVerbosity) {
+            putenv('SHELL_VERBOSITY');
+            unset($_ENV['SHELL_VERBOSITY'], $_SERVER['SHELL_VERBOSITY']);
+        }
+
+        if (!$this->container instanceof ContainerInterface) {
+            throw new \LogicException('Container should be initialized after boot.');
+        }
+
+        $container = $this->container;
+
+        // KernelTrait aliases self::class to the synthetic "kernel" service
+        $container->set('kernel', $this);
+        $container->set(ContainerInterface::class, $container);
+
+        $this->restrictCacheDirectory($this->getCacheDir());
+    }
+
+    public function init(InputInterface $input, OutputInterface $output): void
+    {
+        $container = $this->getContainer();
+        $container->set(InputInterface::class, $input);
+        $container->set(OutputInterface::class, $output);
+
+        $castorContainer = $container->get(Container::class);
+
+        if (!$castorContainer instanceof Container) {
+            throw new \LogicException('Castor container should be initialized after boot.');
+        }
+
+        Container::set($castorContainer);
+
+        // Castor must be updatable even when this version cannot load the
+        // castor file, like when it calls guard_min_version()
+        if ($castorContainer->commandLine->isSelfUpdate()) {
+            // Accepted like by any command, for a script or an alias which
+            // always gives it, but the contexts are not loaded
+            $this->addContextOption('The context to use');
+
+            return;
+        }
+
+        $this->mount($input, $output);
+    }
+
+    public function addMount(Mount $mount): void
+    {
+        $this->mounts[] = $mount;
+    }
+
+    /**
+     * A plugin registered while the remote packages are disabled: the tasks,
+     * contexts and listeners of the files it autoloads are not exposed.
+     */
+    public function addSkippedPackage(string $package): void
+    {
+        $this->skippedPackages[$package] = true;
+    }
+
+    public function configureContainer(ContainerConfigurator $c): void
+    {
+        $services = $c->services();
+        $repacked = $this->repacked;
+        $hasCastorFile = $this->hasCastorFile;
+
+        $services
+            ->defaults()
+                ->autowire()
+                ->autoconfigure()
+                ->bind('string $rootDir', '%root_dir%')
+                ->bind('string $cacheDir', '%cache_dir%')
+                ->bind('bool $hasCastorFile', '%has_castor_file%')
+                ->bind('string $castorFilePath', '%castor_file_path%')
+
+            ->load('Castor\\', __DIR__ . '/*')
+                ->exclude([
+                    __DIR__ . '/functions.php',
+                    __DIR__ . '/functions-internal.php',
+                    __DIR__ . '/Descriptor/*',
+                    __DIR__ . '/Event/*',
+                    __DIR__ . '/**/Exception/*',
+                    __DIR__ . '/Kernel.php',
+                ])
+
+            ->set(CacheInterface::class, FilesystemAdapter::class)
+                ->args([
+                    '$directory' => '%cache_dir%',
+                ])
+            ->alias(CacheItemPoolInterface::class . '&' . CacheInterface::class, CacheInterface::class)
+
+            ->set(HttpClientInterface::class)
+                ->factory([HttpClient::class, 'create'])
+                ->args([
+                    '$defaultOptions' => [
+                        'headers' => [
+                            'User-Agent' => 'Castor/' . Application::VERSION,
+                        ],
+                    ],
+                ])
+
+            ->set(Logger::class)
+                ->args([
+                    '$name' => 'castor',
+                    '$processors' => [
+                        service(ProcessProcessor::class),
+                    ],
+                ])
+            ->alias(LoggerInterface::class, Logger::class)
+
+            ->set(AsciiSlugger::class)
+
+            ->set(DefaultNotifier::class)
+
+            ->set(SymfonyStyle::class)
+
+            ->set(Terminal::class)
+
+            ->set(Container::class)
+                ->public()
+
+            ->set(ContainerInterface::class)
+                ->synthetic()
+
+            ->set(OutputInterface::class)
+                ->synthetic()
+
+            ->set(InputInterface::class)
+                ->synthetic()
+
+            ->set(ErrorHandler::class)
+                ->synthetic()
+
+            ->set(FileLinkFormatter::class)
+        ;
+
+        $app = $services->set(Application::class, $repacked ? \RepackedApplication::class : null)
+                ->public()
+                ->call('addCommand', [service(DebugCommand::class)])
+                ->call('addCommand', [service(ExecuteCommand::class)])
+                ->call('setDispatcher', [service(EventDispatcherInterface::class)])
+                ->call('setCatchErrors', [true])
+        ;
+        if (!$repacked) {
+            $app
+                ->call('addCommand', [service(SelfUpdateCommand::class)])
+                ->call('addCommand', [service(LlmConfigureCommand::class)])
+                ->call('addCommand', [service(LlmDebugCommand::class)])
+            ;
+        }
+        if (!$repacked && $hasCastorFile) {
+            $app
+                ->call('addCommand', [service(ComposerCommand::class)])
+                ->call('addCommand', [service(RepackCommand::class)])
+                ->call('addCommand', [service(CompileCommand::class)])
+            ;
+        }
+
+        if (!$hasCastorFile) {
+            $app
+                ->call('addCommand', [service(InitCommand::class)])
+                ->call('setDefaultCommand', ['init'])
+            ;
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function getKernelParameters(): array
+    {
+        return array_merge($this->getDefaultKernelParameters(), [
+            'container.runtime_mode' => 'cli=1',
+            'root_dir' => $this->rootDir,
+            '.default_cache_dir' => PlatformHelper::getDefaultCacheDirectory(),
+            'event_dispatcher.event_aliases' => ConsoleEvents::ALIASES,
+            'repacked' => $this->repacked,
+            'cache_dir' => '%env(default:.default_cache_dir:CASTOR_CACHE_DIR)%',
+            'composer_no_remote' => '%env(bool:default::CASTOR_NO_REMOTE)%',
+            'context' => '',
+            'env(CASTOR_GENERATE_STUBS)' => 'true',
+            'generate_stubs' => '%env(bool:CASTOR_GENERATE_STUBS)%',
+            'test' => '%env(bool:default::CASTOR_TEST)%',
+            'use_output_section' => '%env(bool:default::CASTOR_USE_SECTION)%',
+            'has_castor_file' => $this->hasCastorFile,
+            'castor_file_path' => $this->castorFilePath,
+        ]);
+    }
+
+    protected function initializeContainer(): void
+    {
+        // KernelTrait would dump the compiled container to disk and reuse it on the next
+        // runs. Compile it fresh instead, to keep the same behavior as before.
+        $container = $this->buildContainer();
+        $container->compile(true);
+        $this->container = $container;
+    }
+
+    protected function initializeBundles(): void
+    {
+        // KernelTrait discovers bundles from "{projectDir}/config/bundles.php", but the
+        // project dir is the *user's* project (possibly a Symfony app): never read it.
+        // ServicesBundle provides the core DI infrastructure (event dispatcher,
+        // filesystem, listeners/subscribers autoconfiguration, ...).
+        $bundle = new ServicesBundle();
+
+        $this->bundles = [$bundle->getName() => $bundle];
+    }
+
+    /**
+     * The cache holds data written by the tasks, and what the update check
+     * fetched: it is only readable by its owner. An existing directory that
+     * is more permissive is restricted, when it belongs to the current user.
+     * Failures are left to the cache adapter, which reports them when it
+     * cannot write.
+     */
+    private function restrictCacheDirectory(string $directory): void
+    {
+        $filesystem = new Filesystem();
+
+        try {
+            if (!is_dir($directory)) {
+                $filesystem->mkdir($directory, 0o700);
+
+                return;
+            }
+
+            $ownedByCurrentUser = !\function_exists('posix_getuid') || fileowner($directory) === posix_getuid();
+
+            if ($ownedByCurrentUser && 0 !== (fileperms($directory) & 0o077)) {
+                $filesystem->chmod($directory, 0o700);
+            }
+        } catch (IOExceptionInterface) {
+        }
+    }
+
+    private function mount(InputInterface $input, OutputInterface $output): void
+    {
+        $c = Container::get();
+
+        try {
+            $c->eventDispatcher->dispatch(new BeforeBootEvent($c->application));
+
+            $allowRemotePackage = $c->composer->isRemoteAllowed();
+
+            $this->addMount(new Mount($this->rootDir, allowRemotePackage: $allowRemotePackage, allowEmptyEntrypoint: !$this->hasCastorFile, file: $this->castorFilePath));
+
+            while ($mount = array_shift($this->mounts)) {
+                $this->load($mount, $output);
+            }
+
+            $this->deprecateNotImportedPackages($c->commandLine, $c->composer);
+
+            $c->eventDispatcher->dispatch(new AfterBootEvent($c->application));
+        } catch (\Throwable $e) {
+            $c->eventDispatcher->dispatch(new ConsoleErrorEvent($input, $output, $e), 'console.error');
+
+            throw $e;
+        }
+    }
+
+    private function load(Mount $mount, OutputInterface $output): void
+    {
+        $c = Container::get();
+
+        $previousFunctions = get_defined_functions()['user'];
+        $previousClasses = get_declared_classes();
+
+        if ($mount->allowRemotePackage) {
+            $c->composer->install($mount->path);
+        }
+
+        if ($mount->path === $this->rootDir) {
+            $c->composer->requireAutoload();
+        } else {
+            // A mounted directory has its own castor.composer.json, installed in its own vendor directory
+            $c->composer->requireAutoload($mount->path);
+        }
+
+        // Apart from the ones of castor.php, as they may belong to a package
+        $autoloadedDefinitions = $this->getDefinitionsSince($previousFunctions, $previousClasses);
+        $previousFunctions = get_defined_functions()['user'];
+        $previousClasses = get_declared_classes();
+
+        try {
+            $this->requireEntrypoint($mount, $c->importer);
+        } catch (CouldNotFindEntrypointException $e) {
+            if (!$mount->allowEmptyEntrypoint) {
+                throw $e;
+            }
+        }
+
+        $entrypointDefinitions = $this->getDefinitionsSince($previousFunctions, $previousClasses);
+        $definitions = [...$this->filterAutoloadedDefinitions($mount, $autoloadedDefinitions), ...$entrypointDefinitions];
+
+        if (null !== $mount->package) {
+            $this->importedPackages[$mount->package] = true;
+
+            // Not when only some features of a plugin are asked for
+            if ($mount->exposeAutoload) {
+                $definitions = [...($this->pendingPackageDefinitions[$mount->package] ?? []), ...$definitions];
+                unset($this->pendingPackageDefinitions[$mount->package]);
+            }
+        }
+
+        $descriptorsCollection = $c->functionResolver->resolveFunctions($definitions);
+
+        foreach ($descriptorsCollection->getDefinitions() as $definition) {
+            if (isset($this->notImportedPackageDefinitions[$definition])) {
+                $this->notImportedPackages[$this->notImportedPackageDefinitions[$definition]] = true;
+            }
+        }
+
+        // Apply mounts
+        foreach ($descriptorsCollection->taskDescriptors as $taskDescriptor) {
+            // A repacked application runs from a phar, whose directories cannot be a working directory
+            if ($mount->workingDirectory && !$this->repacked) {
+                $taskDescriptor->workingDirectory = $mount->workingDirectory;
+            }
+            if ($mount->namespacePrefix) {
+                if ($taskDescriptor->taskAttribute->namespace) {
+                    $taskDescriptor->taskAttribute->namespace = $mount->namespacePrefix . ':' . $taskDescriptor->taskAttribute->namespace;
+                } else {
+                    $taskDescriptor->taskAttribute->namespace = $mount->namespacePrefix;
+                }
+            }
+        }
+
+        $c->functionLoader->loadListeners($descriptorsCollection->listenerDescriptors);
+
+        // Must load contexts before tasks, because tasks can be disabled
+        // depending on the context. And it must be before executing
+        // listeners too, to get the context there.
+        $c->functionLoader->loadContexts($descriptorsCollection->contextDescriptors, $descriptorsCollection->contextGeneratorDescriptors);
+        $this->guardCastorUseChdir($c->commandLine);
+        $this->configureContext($c->commandLine, $output, $c->contextRegistry);
+
+        $event = new FunctionsResolvedEvent(
+            $descriptorsCollection->taskDescriptors,
+            $descriptorsCollection->symfonyTaskDescriptors,
+            $mount->path,
+            $mount->path === $this->rootDir,
+        );
+        $c->eventDispatcher->dispatch($event);
+
+        $c->functionLoader->loadTasks(
+            $event->taskDescriptors,
+            $event->symfonyTaskDescriptors
+        );
+    }
+
+    /**
+     * @param list<string>       $previousFunctions
+     * @param list<class-string> $previousClasses
+     *
+     * @return list<\ReflectionFunction|\ReflectionClass<object>>
+     */
+    private function getDefinitionsSince(array $previousFunctions, array $previousClasses): array
+    {
+        $definitions = [];
+
+        foreach (array_diff(get_defined_functions()['user'], $previousFunctions) as $function) {
+            $definitions[] = new \ReflectionFunction($function);
+        }
+
+        foreach (array_diff(get_declared_classes(), $previousClasses) as $class) {
+            $definitions[] = new \ReflectionClass($class);
+        }
+
+        return $definitions;
+    }
+
+    /**
+     * The functions and the classes of the files autoloaded by the vendor
+     * directory of the mount that it exposes: the code of a package is
+     * exposed by the mount importing the package instead.
+     *
+     * @param list<\ReflectionFunction|\ReflectionClass<object>> $definitions
+     *
+     * @return list<\ReflectionFunction|\ReflectionClass<object>>
+     */
+    private function filterAutoloadedDefinitions(Mount $mount, array $definitions): array
+    {
+        $installedPackages = Container::get()->installedPackages;
+        // By the castor.php of this mount, or of a previous one
+        $queuedPackages = array_filter(array_map(static fn (Mount $queuedMount): ?string => $queuedMount->package, $this->mounts));
+        $mountDefinitions = [];
+
+        foreach ($definitions as $definition) {
+            $file = $definition->getFileName();
+            $package = false === $file ? null : $installedPackages->findPackage($file, $mount->path);
+
+            if (null === $package || $package === $mount->package) {
+                $mountDefinitions[] = $definition;
+            } elseif (\in_array($package, $queuedPackages, true)) {
+                $this->pendingPackageDefinitions[$package][] = $definition;
+            } elseif (isset($this->skippedPackages[$package])) {
+                continue;
+            } else {
+                // Castor 2.0 will only load them when the package is registered
+                $mountDefinitions[] = $definition;
+                $this->notImportedPackageDefinitions[$definition] = $package;
+            }
+        }
+
+        return $mountDefinitions;
+    }
+
+    private function deprecateNotImportedPackages(CommandLine $commandLine, Composer $composer): void
+    {
+        // Nothing to change in the castor.php of a repacked application, and
+        // the deprecation would land in an output meant to be parsed. The
+        // imports are skipped when the remote packages are disabled.
+        if ($this->repacked || $commandLine->isOutputMachineReadable() || !$composer->isRemoteAllowed()) {
+            return;
+        }
+
+        foreach (array_keys(array_diff_key($this->notImportedPackages, $this->importedPackages)) as $package) {
+            trigger_deprecation('jolicode/castor', '1.10.0', \sprintf('Loading the tasks, contexts and listeners the package "%s" autoloads without registering it is deprecated. Add "register_plugin(\'%s\');" to your castor.php to keep them: from Castor 2.0, requiring a package only gives its functions and classes.', $package, $package));
+        }
+    }
+
+    private function requireEntrypoint(Mount $mount, Importer $importer): void
+    {
+        $path = $mount->path;
+
+        // The features of a plugin
+        if (null !== $mount->files) {
+            foreach ($mount->files as $file) {
+                $importer->importFile($file);
+            }
+
+            return;
+        }
+
+        // It's an import, via a remote package, with a file specified
+        if ($mount->file) {
+            if (file_exists($file = $mount->path . '/' . $mount->file)) {
+                $importer->importFile($file);
+
+                return;
+            }
+
+            throw new CouldNotFindEntrypointException('Could not find "' . $mount->path . '/' . $mount->file . '" file.');
+        }
+
+        if (file_exists($file = $path . '/castor.php')) {
+            $importer->importFile($file);
+        } elseif (file_exists($file = $path . '/.castor/castor.php')) {
+            $importer->importFile($file);
+        } else {
+            throw new CouldNotFindEntrypointException();
+        }
+    }
+
+    /**
+     * @param array<string> $contextNames
+     */
+    private function readDotContextFile(array $contextNames): ?string
+    {
+        $contextFile = $this->rootDir . '/.castor.context';
+        if (!file_exists($contextFile)) {
+            return null;
+        }
+
+        $content = trim((string) file_get_contents($contextFile));
+
+        if (!$content || !\in_array($content, $contextNames, true)) {
+            Container::get()->logger->error(\sprintf('The context "%s" defined in ".castor.context" file is not a valid context. Available contexts: %s.', $content ?: '(empty)', implode(', ', $contextNames)));
+
+            return null;
+        }
+
+        return $content;
+    }
+
+    private function guardCastorUseChdir(CommandLine $commandLine): void
+    {
+        // Only worth telling when there is a castor.php to put the define in, so never for a
+        // repacked application, whose castor.php is baked in and not the user's to edit, and
+        // never when the output is meant to be parsed: the deprecation goes through the logger,
+        // so it would land in the middle of "list --format=json" or of the completion script.
+        // This method runs once per mount, so it is told only once.
+        if (\defined('CASTOR_USE_CHDIR')) {
+            return;
+        }
+
+        if ($this->chdirDeprecationTriggered) {
+            return;
+        }
+
+        if ($this->repacked) {
+            return;
+        }
+
+        if (!$this->hasCastorFile) {
+            return;
+        }
+
+        if ($commandLine->isOutputMachineReadable()) {
+            return;
+        }
+
+        $this->chdirDeprecationTriggered = true;
+
+        trigger_deprecation('jolicode/castor', '1.8.0', 'Not defining the "CASTOR_USE_CHDIR" constant is deprecated. Add "defined(\'CASTOR_USE_CHDIR\') || define(\'CASTOR_USE_CHDIR\', true);" at the top of your castor.php so Castor changes its current directory to the working directory of the context (the default in Castor 2.0), or define it to false to keep the current behavior.');
+    }
+
+    private function configureContext(CommandLine $commandLine, OutputInterface $output, ContextRegistry $contextRegistry): void
+    {
+        $contextRegistry->setDefaultIfEmpty();
+
+        $contextNames = $contextRegistry->getNames();
+
+        if (!$contextNames) {
+            $contextRegistry->setCurrentContext(new Context(
+                verbosityLevel: VerbosityLevel::fromSymfonyOutput($output)
+            ));
+
+            return;
+        }
+
+        $currentContextName = $commandLine->getContextName()
+            ?: PlatformHelper::getEnv('CASTOR_CONTEXT')
+            ?: $this->readDotContextFile($contextNames)
+            ?: $contextRegistry->getDefaultName();
+
+        $this->addContextOption(\sprintf('The context to use (%s)', implode('|', $contextNames)), $currentContextName, $contextNames);
+
+        // Listing the tasks does not need the context, which may be slow to
+        // create, or fail
+        if ($commandLine->isList()) {
+            $contextRegistry->setCurrentContext(new Context(
+                verbosityLevel: VerbosityLevel::fromSymfonyOutput($output)
+            ));
+
+            return;
+        }
+
+        $context = $contextRegistry->get($currentContextName);
+
+        if ($context->verbosityLevel->isNotConfigured()) {
+            $context = $context->withVerbosityLevel(VerbosityLevel::fromSymfonyOutput($output));
+        }
+
+        $contextRegistry->setCurrentContext($context->withName($currentContextName));
+    }
+
+    /**
+     * @param list<string> $contextNames
+     */
+    private function addContextOption(string $description, ?string $currentContextName = null, array $contextNames = []): void
+    {
+        $c = Container::get();
+
+        $c->application->getDefinition()->addOption(new InputOption(
+            'context',
+            // The shell completion already has a -c option, which conflicts
+            // with this one even when the shell completion is only described
+            $c->commandLine->isShellCompletion() || $c->commandLine->describesHiddenCommands() ? null : 'c',
+            InputOption::VALUE_REQUIRED,
+            $description,
+            $currentContextName,
+            $contextNames,
+        ));
+    }
+}

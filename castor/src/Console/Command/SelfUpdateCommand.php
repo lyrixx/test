@@ -1,0 +1,353 @@
+<?php
+
+namespace Castor\Console\Command;
+
+use Castor\Console\Application;
+use Castor\Helper\AttestationHelper;
+use Castor\Helper\AttestationStatus;
+use Castor\Helper\Installation;
+use Castor\Helper\InstallationMethod;
+use Castor\Helper\ReleaseHelper;
+use Castor\Http\HttpDownloader;
+use JoliCode\PhpOsHelper\OsHelper;
+use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Attribute\Option;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\Filesystem\Exception\IOExceptionInterface;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Filesystem\Path;
+use Symfony\Component\Process\Process;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+
+/** @internal */
+#[AsCommand(
+    name: self::NAME,
+    description: 'Updates Castor to the latest version',
+    aliases: ['self-update'],
+)]
+final readonly class SelfUpdateCommand
+{
+    public const string NAME = 'castor:self-update';
+
+    public function __construct(
+        private ReleaseHelper $releaseHelper,
+        private AttestationHelper $attestationHelper,
+        private HttpDownloader $httpDownloader,
+        private HttpClientInterface $httpClient,
+        private Installation $installation,
+        private Filesystem $filesystem,
+    ) {
+    }
+
+    public function __invoke(
+        SymfonyStyle $io,
+        #[Option(description: 'Force update even if already up to date', shortcut: 'f')]
+        bool $force = false,
+        #[Option(description: 'Skip creating a backup of the current binary')]
+        bool $noBackup = false,
+        #[Option(description: 'Rollback to the previous version', shortcut: 'r')]
+        bool $rollback = false,
+        #[Option(description: 'Update to the latest snapshot of the main branch')]
+        bool $snapshot = false,
+    ): int {
+        $installationMethod = $this->installation->getMethod();
+        $currentPath = $this->installation->getPath();
+
+        if ($rollback) {
+            return $this->rollback($io, $currentPath);
+        }
+
+        if (!$installationMethod->isSelfUpdateable()) {
+            return $this->handleUnsupportedInstallationMethod($io, $installationMethod);
+        }
+
+        if (InstallationMethod::ComposerGlobal === $installationMethod) {
+            return $this->updateViaComposer($io);
+        }
+
+        return $this->updateBinary($io, $force, $noBackup, $snapshot, $currentPath);
+    }
+
+    private function updateViaComposer(SymfonyStyle $io): int
+    {
+        $io->section('Updating Castor via Composer...');
+
+        $process = new Process(['composer', 'global', 'update', 'jolicode/castor']);
+        $process->setTimeout(300);
+        $process->mustRun(static function (string $type, string $buffer) use ($io): void {
+            $io->write($buffer);
+        });
+
+        $io->success('Castor has been updated successfully!');
+
+        return Command::SUCCESS;
+    }
+
+    private function updateBinary(SymfonyStyle $io, bool $force, bool $noBackup, bool $snapshot, string $currentPath): int
+    {
+        $io->section('Checking for updates...');
+
+        // Always hit GitHub here: the user explicitly asked for an update, a
+        // day-old cached release would be misleading
+        $latestVersion = $snapshot
+            ? $this->releaseHelper->getRelease(ReleaseHelper::SNAPSHOT_TAG, useCache: false, timeout: 10)
+            : $this->releaseHelper->getLatest(useCache: false, timeout: 10);
+
+        if (null === $latestVersion) {
+            $io->error('Failed to fetch latest version information from GitHub.');
+
+            return Command::FAILURE;
+        }
+
+        // Releases are named after their tag, the snapshot pre-release after
+        // the version it was built from (e.g. v1.7.0-14-g4531440)
+        $latestTag = $snapshot ? $latestVersion['name'] : $latestVersion['tag_name'];
+        $currentVersion = Application::VERSION;
+
+        $io->text(\sprintf('Current version: <info>%s</info>', $currentVersion));
+        $io->text(\sprintf('Latest %s: <info>%s</info>', $snapshot ? 'snapshot' : 'version', $latestTag));
+        $io->newLine();
+
+        // Snapshot versions do not compare with releases: a snapshot is only
+        // up to date when it is the latest one, and a release is always "newer"
+        // than a snapshot for someone leaving the snapshots
+        $upToDate = $snapshot || Application::isSnapshot()
+            ? $latestTag === $currentVersion
+            : version_compare($latestTag, $currentVersion, '<=');
+
+        if (!$force && $upToDate) {
+            $io->success('You are already using the latest version of Castor.');
+
+            return Command::SUCCESS;
+        }
+
+        if (Application::isSnapshot() && !$snapshot) {
+            $io->note('You are running a snapshot: switching back to the latest release. Use --snapshot to stay on the snapshots.');
+        }
+
+        $asset = $this->releaseHelper->getDownloadAsset($latestVersion);
+
+        if (null === $asset) {
+            $io->error('Could not find a suitable download for your platform.');
+
+            return Command::FAILURE;
+        }
+
+        if (!is_writable(\dirname($currentPath))) {
+            $io->error(\sprintf(
+                'Cannot update: directory "%s" is not writable. Try running with elevated privileges.',
+                \dirname($currentPath)
+            ));
+
+            return Command::FAILURE;
+        }
+
+        $io->text(\sprintf('Downloading <comment>%s</comment>', $asset['browser_download_url']));
+
+        // Download next to the current binary: the final rename() must happen
+        // on the same filesystem, and the temp dir is often a different one.
+        // Windows only runs .exe files, and the new binary is run to be verified.
+        $tempFile = OsHelper::isWindows() ? Path::changeExtension($currentPath, 'tmp.exe') : $currentPath . '.tmp';
+        $backupPath = $noBackup ? null : $currentPath . '.backup';
+
+        try {
+            // Through the API URL of the asset, see ReleaseHelper::getDownloadAsset()
+            $this->httpDownloader->download($asset['url'], $tempFile, options: ['headers' => ['Accept' => 'application/octet-stream']]);
+            $this->filesystem->chmod($tempFile, 0o755);
+
+            if (!$this->verifyChecksum($io, $latestVersion, $asset['name'], $tempFile) || !$this->verifyProvenance($io, $tempFile)) {
+                $this->filesystem->remove($tempFile);
+
+                return Command::FAILURE;
+            }
+
+            $io->text('Verifying new binary...');
+            $verifyProcess = new Process([$tempFile, '--version']);
+            $verifyProcess->run();
+
+            if (!$verifyProcess->isSuccessful()) {
+                $io->error('The downloaded binary appears to be corrupted. Update aborted.');
+                $this->filesystem->remove($tempFile);
+
+                return Command::FAILURE;
+            }
+
+            if ($backupPath) {
+                $io->text(\sprintf('Creating backup at: <comment>%s</comment>', $backupPath));
+                $this->filesystem->copy($currentPath, $backupPath, true);
+
+                $io->note('A backup of the previous version has been saved. Use --rollback to restore it.');
+            }
+        } catch (IOExceptionInterface|\RuntimeException $e) {
+            $io->error(\sprintf('Failed to update Castor: %s', $e->getMessage()));
+            $this->filesystem->remove($tempFile);
+
+            return Command::FAILURE;
+        }
+
+        $io->text('Replacing current binary...');
+
+        $this->replaceRunningBinary($tempFile, $currentPath, \sprintf('Castor has been updated from %s to %s!', $currentVersion, $latestTag));
+    }
+
+    /**
+     * Compares the SHA-256 checksum of the downloaded binary with the one
+     * listed in the SHA256SUMS asset of the release. Releases published
+     * before that file existed are updated without this check.
+     *
+     * @param array<string, mixed> $release
+     */
+    private function verifyChecksum(SymfonyStyle $io, array $release, string $assetName, string $binary): bool
+    {
+        $io->text('Verifying the binary checksum...');
+
+        $checksumsAsset = $this->releaseHelper->getChecksumsAsset($release);
+
+        if (null === $checksumsAsset) {
+            $io->warning(\sprintf('This release has no %s file, so the checksum of the downloaded binary cannot be verified.', ReleaseHelper::CHECKSUMS_FILE));
+
+            return true;
+        }
+
+        $checksums = $this->httpClient
+            ->request('GET', $checksumsAsset['url'], ['headers' => ['Accept' => 'application/octet-stream'], 'timeout' => 10])
+            ->getContent()
+        ;
+
+        $expected = $this->releaseHelper->getExpectedChecksum($checksums, $assetName);
+        $actual = hash_file('sha256', $binary);
+
+        if (!hash_equals($expected, (string) $actual)) {
+            $io->error(\sprintf('The checksum of the downloaded binary does not match the one listed in %s. Update aborted.', ReleaseHelper::CHECKSUMS_FILE));
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Aborts the update when the binary has no attestation: the latest release
+     * always has one, so a missing attestation means this is not our build.
+     * Without an authenticated GitHub CLI, the update goes on unverified.
+     */
+    private function verifyProvenance(SymfonyStyle $io, string $binary): bool
+    {
+        $io->text('Verifying the binary provenance...');
+
+        switch ($this->attestationHelper->verify($binary)) {
+            case AttestationStatus::Skipped:
+                $io->warning('Install and log in to the GitHub CLI (gh 2.49 or later) to verify the provenance of the downloaded binary.');
+
+                return true;
+            case AttestationStatus::Verified:
+                return true;
+            case AttestationStatus::NotAttested:
+                $io->error('No attestation found on GitHub for the downloaded binary, so it cannot be trusted as a Castor build. Update aborted.');
+
+                return false;
+        }
+    }
+
+    private function handleUnsupportedInstallationMethod(SymfonyStyle $io, InstallationMethod $installationMethod): int
+    {
+        $io->error(\sprintf(
+            'Self-update is not supported for "%s" installation method.',
+            $installationMethod->value
+        ));
+
+        match ($installationMethod) {
+            InstallationMethod::Composer => $io->block(
+                'Castor is installed as a project dependency via Composer. ' .
+                'Updating it manually would break the consistency with your composer.lock file.',
+                'WHY?',
+                'fg=yellow',
+                ' ',
+            ),
+            InstallationMethod::Source => $io->block(
+                'Castor is running from source (Git checkout). ' .
+                'Replacing files would break your Git repository.',
+                'WHY?',
+                'fg=yellow',
+                ' ',
+            ),
+            InstallationMethod::Mise => $io->block(
+                'Castor is installed with mise. ' .
+                'Replacing the binary would hide the new version from mise.',
+                'WHY?',
+                'fg=yellow',
+                ' ',
+            ),
+            default => null,
+        };
+
+        $updateCommand = match ($installationMethod) {
+            InstallationMethod::Composer => 'composer update jolicode/castor',
+            InstallationMethod::Source => 'git pull',
+            InstallationMethod::Mise => 'mise upgrade github:jolicode/castor',
+            default => null,
+        };
+
+        if ($updateCommand) {
+            $io->block(\sprintf('To update, run: <comment>%s</comment>', $updateCommand), 'TIP', 'fg=green', ' ', escape: false);
+        }
+
+        return Command::FAILURE;
+    }
+
+    private function rollback(SymfonyStyle $io, string $currentPath): int
+    {
+        $backupPath = $currentPath . '.backup';
+
+        if (!file_exists($backupPath)) {
+            $io->error('No backup found. Cannot rollback.');
+
+            return Command::FAILURE;
+        }
+
+        $io->section('Rolling back to previous version...');
+
+        $this->filesystem->chmod($backupPath, 0o755);
+
+        $this->replaceRunningBinary($backupPath, $currentPath, 'Successfully rolled back to the previous version.');
+    }
+
+    /**
+     * Replaces the file of the currently running binary, then exits
+     * immediately.
+     *
+     * The running phar or static binary lazily re-reads its own file, by path,
+     * every time a new class is loaded: executing any further code once the
+     * file has been replaced crashes with a phar corruption error. So this
+     * method must be the very last thing the command does, and the success
+     * message is written with fwrite() because nothing may be lazy-loaded
+     * anymore.
+     */
+    private function replaceRunningBinary(string $newBinary, string $currentPath, string $successMessage): never
+    {
+        try {
+            if (OsHelper::isWindows()) {
+                // Windows locks the file of a running executable: it cannot be
+                // overwritten nor deleted, but it can be renamed. So it is
+                // moved out of the way first, and this leftover of the
+                // previous update is removed now that it no longer runs.
+                $oldBinary = $currentPath . '.old';
+                $this->filesystem->remove($oldBinary);
+                $this->filesystem->rename($currentPath, $oldBinary);
+            }
+
+            $this->filesystem->rename($newBinary, $currentPath, true);
+        } catch (IOExceptionInterface $e) {
+            // Keep $newBinary in place: when rolling back, it is the only
+            // remaining copy of the previous version
+            fwrite(\STDERR, \sprintf('Failed to replace the binary: %s', $e->getMessage()) . \PHP_EOL);
+
+            exit(Command::FAILURE);
+        }
+
+        fwrite(\STDOUT, \PHP_EOL . ' [OK] ' . $successMessage . \PHP_EOL);
+
+        exit(Command::SUCCESS);
+    }
+}

@@ -1,0 +1,25 @@
+{
+    "config": {
+        "sort-packages": true
+    },
+    "require": {
+        "castor-example/plugin": "^1.0",
+        "doctrine/collections": "=2.2.2"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "tools/example-plugin",
+            "options": {
+                "versions": {
+                    "castor-example/plugin": "1.0.0"
+                }
+            }
+        }
+    ],
+    "autoload": {
+        "files": [
+            "tests/autoload/loadme.php"
+        ]
+    }
+}

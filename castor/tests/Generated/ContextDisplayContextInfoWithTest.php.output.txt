@@ -1,0 +1,6 @@
+context name: dynamic
+Production? no
+verbosity: -10
+context: bar
+nested merge recursive: []
+bar

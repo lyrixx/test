@@ -1,0 +1,30 @@
+- [Home](index.md)
+- [Installation](installation/index.md)
+    - [The official installer](installation/installer.md)
+    - [Alternative methods](installation/alternative-methods.md)
+    - [GitHub Action](installation/github-action.md)
+- [Documentation](docs/index.md)
+    - [Getting started](docs/getting-started/index.md)
+        - [Basic Usage](docs/getting-started/basic-usage.md)
+        - [Executing Processes with `run()`](docs/getting-started/run.md)
+        - [Task Arguments](docs/getting-started/arguments.md)
+        - [Using the Context](docs/getting-started/context.md)
+        - [Remote execution](docs/getting-started/remote.md)
+    - [Going further](docs/going-further/index.md)
+        - Helpers
+            - [Manipulating the input and output and interacting with the Console](docs/going-further/helpers/console-and-io.md)
+            - docs/going-further/helpers/*.md
+        - Interacting with Castor
+            - [Advanced Context usage](docs/going-further/interacting-with-castor/advanced-context.md)
+            - docs/going-further/interacting-with-castor/*.md
+        - Extending Castor
+            - [Listening to events](docs/going-further/extending-castor/events.md)
+            - docs/going-further/extending-castor/*.md
+    - [Reference](docs/reference.md)
+- [Need help?](help/index.md)
+    - [FAQ](help/faq.md)
+    - [Examples and use-cases](help/examples.md)
+    - [Support](help/support.md)
+- [Changelog](changelog.md)
+
+<!-- markdownlint-disable-file first-line-h1 -->

@@ -1,0 +1,5 @@
+ Do you want to initialize current directory with castor? This will create an initial "castor.php" file. (yes/no) [no]:
+ >
+
+ ! [NOTE] Doing nothing.
+

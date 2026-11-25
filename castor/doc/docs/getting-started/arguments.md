@@ -1,0 +1,188 @@
+---
+description: >
+  Learn how to define and use task arguments and options in Castor, including
+  optional arguments, validation, and path-specific autocompletion.
+---
+
+# Task arguments
+
+When creating a function that will be used as a task, all the parameters of
+the function will be used as arguments or options:
+
+```php
+{{ php("examples/basic/arguments/simple.php") }}
+```
+
+This task can be called like that:
+
+```console
+$ castor simple foo bar
+foo bar
+```
+
+## Optional arguments
+
+You can make an argument optional by giving it a default value:
+
+```php
+{{ php("examples/basic/arguments/optional.php") }}
+```
+
+```console
+$ castor optional foo
+foo default
+$ castor optional foo --second-arg=bar
+foo bar
+```
+
+## Arguments without configuration nor validation
+
+By default, Castor will validate the arguments and options provided to a task.
+Thus it will emit an error if an unknown argument or option is provided or if an
+required argument is missing:
+
+```console
+$ castor simple foo --unknown-option value
+                                                 
+  The "--unknown-option" option does not exist.  
+                                                 
+```
+
+If you want to disable this validation for a specific task, you can use the
+`ignoreValidationErrors` flag:
+
+```php
+{{ php("examples/basic/arguments/no-validation.php") }}
+```
+
+Castor will not emit validation errors for unknown arguments or options when
+running this task:
+
+```bash
+castor no-validation --unknown-option value
+```
+
+But instead of simply disabling validation, you may also want to capture the raw
+arguments provided to the task and pass them to a sub process.
+You can do so by using the `#[AsRawTokens]()` attribute instead:
+
+```php
+{{ php("examples/basic/arguments/raw-tokens.php") }}
+```
+
+Then, you can use it like that:
+
+```bash
+castor phpunit --filter=testName --debug --verbose
+```
+
+## Getting argument after end of options
+
+A common use case when dealing with command line arguments is to ignore all
+options after the `--` delimiter.
+
+This is useful when you want to pass options to a sub command that may
+conflict with the options of the main command.
+
+You can achieve this by using the `#[AsArgsAfterOptionEnd]` attribute:
+
+```php
+{{ php("examples/basic/arguments/args-after-end-option.php") }}
+```
+
+## Overriding the argument name and description
+
+You can override the name and description of an argument by using
+the `#[Castor\Attribute\AsArgument()]` attribute:
+
+```php
+{{ php("examples/basic/arguments/overriding-argument.php") }}
+```
+
+```console
+$ castor override-argument --help
+Usage:
+  arguments:override-argument [<foo>]
+
+Arguments:
+  foo                         This is the foo argument [default: "bar"]
+
+```
+
+## Overriding the option name and description
+
+If you prefer, you can force an argument to be an option by using the
+`#[Castor\Attribute\AsOption()]` attribute:
+
+```php
+{{ php("examples/basic/arguments/overriding-option.php") }}
+```
+
+```php
+$ castor override-option --help
+Usage:
+  arguments:override-option [options]
+
+Options:
+      --foo[=FOO]           This is the foo option [default: "bar"]
+
+```
+
+```console
+$ castor override-option --foo=foo
+foo
+```
+
+You can also configure the `mode` of the option. The `mode` determines how the
+option will be registered (no value expected, required, optional, negatable, etc):
+
+```php
+{{ php("examples/basic/arguments/option-mode.php") }}
+```
+
+```console
+$ castor option-mode --force
+Command has been forced.
+```
+
+Please refer to the [Symfony
+documentation](https://symfony.com/doc/current/console/input.html#using-command-options)
+for more information about option modes.
+
+## Path arguments and options
+
+In some cases, you may want the user to provide a path in an argument or an option.
+In order to ease the use of paths for users, Castor provides the `#[AsPathArgument()]`
+and `#[AsPathOption()]` attributes alternatives to `#[AsArgument()]` and `#[AsOption]()`.
+
+When using `#[AsPathArgument()]` or `#[AsPathOption()]`, the argument or option
+will be autocompleted with suggestions of paths.
+
+```php
+{{ php("examples/basic/arguments/path-argument.php") }}
+```
+
+```console
+$ castor path-argument /var/www/[TAB]
+/var/www/foo  /var/www/bar  /var/www/baz
+```
+
+### Restricting suggestions with `directory` and `filter`
+
+You can use the `directory` parameter to restrict suggestions to a specific
+directory, and the `filter` parameter to only suggest files matching a glob
+pattern (e.g. `'*.yaml'`) or an array of patterns (e.g. `['*.yaml', '*.yml']`).
+Subdirectories are always shown to allow navigation.
+
+```php
+{{ php("examples/basic/arguments/path-option-with-filter.php") }}
+```
+
+```console
+$ castor lint --file [TAB]
+routes.yaml  services.yaml  packages/
+$ castor lint --file packages/[TAB]
+packages/framework.yaml  packages/security.yaml
+```
+
+See the [autocompletion documentation](../going-further/interacting-with-castor/autocomplete.md) for more information about completion.

@@ -1,0 +1,7 @@
+In FunctionResolver.php line XXXX:
+
+  Function "gen()" is not properly configured:
+  The context generator "foo" must not have arguments.
+  Defined in "castor.php" line 7.
+
+

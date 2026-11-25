@@ -1,0 +1,38 @@
+<?php
+
+$finder = PhpCsFixer\Finder::create()
+    ->ignoreVCSIgnored(true)
+    ->ignoreDotFiles(false)
+    ->in(__DIR__)
+    ->append([
+        __FILE__,
+    ])
+    ->notPath([
+        '.castor.stub.php',
+        'tests/Stub/fixtures',
+        'examples/advanced/event_listener/access_attributes_of_task.php', // There is a class in it, we don't want it to be renamed
+        'examples/advanced/event_listener/dispatch.php', // There is a class in it, we don't want it to be renamed
+        'examples/advanced/remote_import/import_class.php', // There is a class in it, we don't want it to be renamed
+        'tests/Stub/StubsGeneratorTest.php', // see https://github.com/PHP-CS-Fixer/PHP-CS-Fixer/issues/9415
+    ])
+;
+
+return new PhpCsFixer\Config()
+    ->setParallelConfig(PhpCsFixer\Runner\Parallel\ParallelConfigFactory::detect())
+    ->setRiskyAllowed(true)
+    ->setRules([
+        '@PHP84Migration' => true,
+        '@PhpCsFixer' => true,
+        '@Symfony' => true,
+        '@Symfony:risky' => true,
+        'php_unit_internal_class' => false, // From @PhpCsFixer but we don't want it
+        'php_unit_test_class_requires_covers' => false, // From @PhpCsFixer but we don't want it
+        'phpdoc_add_missing_param_annotation' => false, // From @PhpCsFixer but we don't want it
+        'ordered_class_elements' => true, // Symfony(PSR12) override the default value, but we don't want it
+        'blank_line_before_statement' => true, // Symfony(PSR12) override the default value, but we don't want it
+        'method_chaining_indentation' => false, // Does not work with tree builder
+        'concat_space' => ['spacing' => 'one'],
+        'native_function_invocation' => ['include' => ['@compiler_optimized', 'clone']],
+    ])
+    ->setFinder($finder)
+;

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block htmltitle %}
+    {% if page.is_homepage %}
+    <title>{{ page.meta.title }}</title>
+    {% elif page.meta and page.meta.title %}
+    <title>{{ page.meta.title }} - Castor task runner</title>
+    {% else %}
+    <title>{{ page.title | striptags }} - Castor task runner</title>
+    {% endif %}
+{% endblock %}
+
+{% block extrahead %}
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "SoftwareApplication",
+            "name": "Castor",
+            "url": "{{ config.site_url }}",
+            "description": "Castor is a lightweight and modern task runner. Automate everything in PHP.",
+            "applicationCategory": "DeveloperTool",
+            "operatingSystem": "All",
+            "programmingLanguage": "PHP",
+            "license": "https://opensource.org/licenses/MIT",
+            "author": {
+                "@type": "Organization",
+                "name": "JoliCode"
+            },
+            "offers": {
+                "@type": "Offer",
+                "price": "0",
+                "priceCurrency": "USD"
+            },
+            "softwareVersion": "{% include "partials/version.html" %}",
+            "downloadUrl": "https://github.com/jolicode/castor",
+            "sameAs": [ "{{ config.repo_url }}", "https://packagist.org/packages/jolicode/castor" ]
+        }
+    </script>
+{% endblock %}
+
+{% block footer %}
+    {{ super() }}
+    {% include "partials/jolicode-footer.html" %}
+{% endblock %}

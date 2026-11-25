@@ -1,0 +1,49 @@
+#!/usr/bin/env php
+<?php
+
+if (!isset($_SERVER['CASTOR_TEST']) && PHP_VERSION_ID < 80401) {
+    fwrite(STDERR, sprintf("Castor requires PHP >= 8.4.1, but you are running PHP %s.\n", PHP_VERSION));
+    fwrite(STDERR, "You can still use castor, but you must install the static version of castor.\n");
+    fwrite(STDERR, "Read more at https://castor.jolicode.com/installation/installer/static\n");
+    exit(1);
+}
+
+use Castor\Console\Application;
+use Castor\Console\ApplicationFactory;
+
+$memoryLimit = $_SERVER['CASTOR_MEMORY_LIMIT'] ?? false;
+if ($memoryLimit && function_exists('ini_set')) {
+    ini_set('memory_limit', $memoryLimit);
+}
+
+$phpFile = $_SERVER['CASTOR_PHP_REPLACE'] ?? false;
+if ($phpFile) {
+    // Avoid infinite loop if we exec castor inside castor
+    unset($_SERVER['CASTOR_PHP_REPLACE']);
+
+    // override script filename env var
+    $_SERVER['SCRIPT_FILENAME'] = $phpFile;
+
+    require $phpFile;
+
+    exit(0);
+}
+
+if (file_exists($file = __DIR__ . '/../vendor/autoload.php')) {
+    require $file;
+} elseif (file_exists($file = __DIR__ . '/../../../../vendor/autoload.php')) {
+    require $file;
+} else {
+    throw new \RuntimeException('Unable to find autoloader.');
+}
+
+// // to debug repacked applications, uncomment the following lines
+// class RepackedApplication extends Application
+// {
+//     public const NAME = 'my-app';
+//     public const VERSION = '1.0.0';
+//     public const ROOT_DIR = __DIR__ . '/../tests/fixtures/valid/layout-with-folder/';
+//     public const HIDE_LOGO = false;
+// }
+
+ApplicationFactory::create()->run();

@@ -1,0 +1,74 @@
+---
+description: >
+  Learn how to enforce a minimum Castor version for your tasks using
+  `guard_min_version()` and manage update reminders for a smooth development
+  experience.
+---
+
+# Check Castor version
+
+This document explains how to manage and enforce Castor versions within your
+projects.
+
+## The `guard_min_version()` function
+
+```php
+use function Castor\guard_min_version;
+
+guard_min_version('v0.11.0');
+```
+
+This function will throw an exception if the current version of Castor is lower (e.g. `0.10.0`).
+That will force the user to update Castor before running the command.
+
+This is useful when you want to use a new feature of Castor in your command.
+In this situation, you want to ensure that the user has the right version of Castor.
+
+> [!TIP]
+> Where to put this function?
+>
+> It depends on your usage. If you want to ensure that the user has the right
+> version of Castor before running any task, you can put it in the top of your
+> `castor.php` file.
+>
+> If you only want to ensure that the user has the right version of Castor before
+> running a specific task, you can put it in the task function directly and
+> check will be done only when the task is called.
+
+You can go further with [Events and Listeners](../extending-castor/events.md#listening-to-events)
+to check certain conditions by checking a pattern task name.
+
+## Update reminder
+
+When a new version is available, Castor will periodically remind the user to
+update the tool once in a day.
+
+To know about new versions, Castor fetches the latest release from the GitHub
+API (`api.github.com`) at most once a day, and caches the answer. This is the
+only network request Castor makes on its own: it carries nothing but the
+Castor version, in the `User-Agent` header, and no usage data is ever
+collected. The request is skipped in CI, when running inside an AI agent, and
+when the output is JSON.
+
+The reminder only starts 3 days after the release is published, so a broken
+release can be fixed before everybody is told to install it. The delay is
+skipped when the castor file requires a newer version, and `castor self-update`
+always installs the latest release.
+
+This behavior can be disabled by setting the `CASTOR_DISABLE_VERSION_CHECK`
+environment variable to `1` or `true`.
+
+## AI agent context
+
+Castor automatically detects when it is running inside an AI agent (e.g. Claude
+Code, GitHub Copilot Workspace, or any environment where `STDIN` is not a TTY).
+In that context, Castor reduces its output to avoid polluting the agent's
+context window: the ASCII logo is hidden and update reminders are suppressed.
+
+If the detection produces a false positive — for instance in a CI pipeline that
+looks like an agent — you can disable it by setting the
+`CASTOR_DISABLE_AGENT_DETECTION` environment variable to any non-empty value:
+
+```bash
+CASTOR_DISABLE_AGENT_DETECTION=true castor my-task
+```

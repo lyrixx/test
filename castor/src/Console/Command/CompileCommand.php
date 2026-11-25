@@ -1,0 +1,429 @@
+<?php
+
+namespace Castor\Console\Command;
+
+use Castor\Helper\PathHelper;
+use Castor\Runner\PhpServerRunner;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Filesystem\Path;
+use Symfony\Component\Process\Process;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+
+/** @internal */
+class CompileCommand extends Command
+{
+    // When something **important** related to the compilation changed, increase
+    // this version to invalidate the cache
+    private const CACHE_VERSION = '5';
+    private const DEFAULT_SPC_VERSION = '2.8.5';
+
+    /**
+     * SHA-256 checksums of the static-php-cli (spc) archives, by version and
+     * target, computed from the assets of the GitHub releases. The download
+     * is checked against them, or against --spc-sha256 for other versions.
+     */
+    private const array SPC_CHECKSUMS = [
+        '2.8.2' => [
+            'linux-x86_64' => '42b410182875ed2076e147db63c6c17f7feb4ba77652b4bb24ae06adb40747dd',
+            'linux-aarch64' => '28206b05c4028826615c6cd348831d7c5025ffd0e57a9309a4aa04c51fe35d58',
+            'macos-x86_64' => 'c98e6059e6e64bfe8710cd76186598bf51dc3ccfe4cafcc504c471d4fc8e3f07',
+            'macos-aarch64' => 'c934c323df75b6b5d258a90a85e204479341217b23819fcf5546845d8579e39e',
+        ],
+        // 2.8.4 is the first version to link zlib in the Windows micro SAPI
+        '2.8.5' => [
+            'linux-x86_64' => '523ba4279c54c7a377156c0dd3a36adf92ee64b01e9a7f5e9e2ec084b8e458e5',
+            'linux-aarch64' => '675a3840dcdc4ed041fe20eaa54310ce019a9984c1c03951df9ec66df5795213',
+            'macos-x86_64' => 'e8b798048f62ca4960764196543b60ae703f7174aa418824cf542aeec1d2cd6a',
+            'macos-aarch64' => 'acf2f25d56d0cbf8e65aa82e5054fef555f7be7c5c38046c6e0819f266d83225',
+            'windows-x86_64' => '425b54ab857e21409c1fd9b818899ffebabd1e2817ef0a0ed5ae8a3d9f5b463b',
+        ],
+    ];
+
+    public function __construct(
+        private readonly HttpClientInterface $httpClient,
+        private readonly Filesystem $fs,
+        private readonly string $cacheDir,
+    ) {
+        parent::__construct();
+    }
+
+    protected function configure(): void
+    {
+        $this
+            ->setName('castor:compile')
+            ->setAliases(['compile'])
+            ->addArgument('phar-path', InputArgument::REQUIRED, 'Path to phar to compile along PHP')
+            ->addOption('spc-version', null, InputOption::VALUE_REQUIRED, 'Version of the static-php-cli (spc) tool to use', self::DEFAULT_SPC_VERSION)
+            ->addOption('spc-sha256', null, InputOption::VALUE_REQUIRED, 'SHA-256 checksum of the static-php-cli (spc) archive to download, required for a version other than the default one')
+            ->addOption('binary-path', null, InputOption::VALUE_REQUIRED, 'Path to compiled static binary. It can be the parent dirname too, and defaults to the root directory')
+            ->addOption('os', null, InputOption::VALUE_REQUIRED, 'Target OS for PHP compilation', 'linux', ['linux', 'macos', 'windows'])
+            ->addOption('arch', null, InputOption::VALUE_REQUIRED, 'Target architecture for PHP compilation', 'x86_64', ['x86_64', 'aarch64'])
+            ->addOption('php-version', null, InputOption::VALUE_REQUIRED, 'PHP version in major.minor format', '8.5')
+            ->addOption('php-extensions', null, InputOption::VALUE_REQUIRED, 'PHP extensions required, in a comma-separated format. Defaults are the minimum required to run a basic "Hello World" task in Castor.', 'mbstring,phar,posix,tokenizer,curl,filter,openssl')
+            ->addOption('php-ini-file', 'N', InputOption::VALUE_REQUIRED, 'ini file to inject into micro.sfx when combining')
+            ->addOption('php-rebuild', null, InputOption::VALUE_NONE, 'Ignore cache and force PHP build compilation.')
+            ->addOption('php-cli', null, InputOption::VALUE_NONE, 'Also build a PHP CLI and embed it in the binary, for what the binary cannot do by itself, like running the built-in web server.')
+            ->setHidden(true)
+        ;
+    }
+
+    protected function execute(InputInterface $input, OutputInterface $output): int
+    {
+        $this->validateInput($input);
+        $io = new SymfonyStyle($input, $output);
+        $io->section('Compiling PHP and your Castor app phar into a static binary');
+
+        $phpBuildCacheKey = $this->generatePHPBuildCacheKey($input);
+
+        $os = $input->getOption('os');
+        $arch = $input->getOption('arch');
+
+        $spcBinaryPath = $this->cacheDir . '/castor-php-static-compiler/' . $phpBuildCacheKey . '/spc' . ('windows' === $os ? '.exe' : '');
+        $spcBinaryDir = \dirname($spcBinaryPath);
+
+        $this->setupSPC(
+            $spcBinaryDir,
+            $spcBinaryPath,
+            $io,
+            $os,
+            $arch,
+            $input->getOption('spc-version'),
+            $input->getOption('spc-sha256'),
+        );
+
+        $embedPHPCli = $input->getOption('php-cli');
+        $phpCliPath = $spcBinaryDir . '/buildroot/bin/php' . ('windows' === $os ? '.exe' : '');
+
+        if (
+            !$this->fs->exists($spcBinaryDir . '/buildroot/bin/micro.sfx')
+            || ($embedPHPCli && !$this->fs->exists($phpCliPath))
+            || $input->getOption('php-rebuild')
+        ) {
+            $this->installPHPBuildTools($spcBinaryPath, $spcBinaryDir, $io);
+
+            $phpExtensions = $input->getOption('php-extensions');
+
+            $this->downloadPHPSourceDeps(
+                $spcBinaryPath,
+                $phpExtensions,
+                $input->getOption('php-version'),
+                $spcBinaryDir,
+                $io
+            );
+
+            $this->buildPHP(
+                $spcBinaryPath,
+                $phpExtensions,
+                $embedPHPCli ? ['--build-micro', '--build-cli'] : ['--build-micro'],
+                $os,
+                $spcBinaryDir,
+                $io,
+                $output->getVerbosity() >= OutputInterface::VERBOSITY_DEBUG,
+            );
+        }
+
+        $binaryPath = $this->getBinaryPath($input);
+        $pharPath = $input->getArgument('phar-path');
+
+        if ($embedPHPCli) {
+            $pharPath = $this->createPharWithPHPCli($pharPath, $phpCliPath, $spcBinaryDir, $io);
+        }
+
+        try {
+            $this->mergePHPandPHARIntoSingleExecutable(
+                $spcBinaryPath,
+                $pharPath,
+                $binaryPath,
+                $spcBinaryDir,
+                $input->getOption('php-ini-file'),
+                $io
+            );
+        } finally {
+            if ($embedPHPCli) {
+                $this->fs->remove($pharPath);
+            }
+        }
+
+        $io->success(\sprintf('Your Castor app has been compiled into a static binary in "%s"', $binaryPath));
+
+        return Command::SUCCESS;
+    }
+
+    private function validateInput(InputInterface $input): void
+    {
+        $os = $input->getOption('os');
+        if (!\in_array($os, ['linux', 'macos', 'windows'])) {
+            throw new \InvalidArgumentException('Currently supported target OS are one of "linux", "macos" or "windows"');
+        }
+
+        $arch = $input->getOption('arch');
+        if (!\in_array($arch, ['x86_64', 'aarch64'])) {
+            throw new \InvalidArgumentException('Target architecture must be one of "x86_64" or "aarch64"');
+        }
+
+        if ('windows' === $os && 'x86_64' !== $arch) {
+            throw new \InvalidArgumentException('Windows is only supported on the "x86_64" architecture');
+        }
+
+        if (!is_file($input->getArgument('phar-path'))) {
+            throw new \InvalidArgumentException(\sprintf('The phar file "%s" does not exist.', $input->getArgument('phar-path')));
+        }
+
+        $spcChecksum = $input->getOption('spc-sha256');
+        if (null !== $spcChecksum && !preg_match('/^[0-9a-f]{64}$/i', $spcChecksum)) {
+            throw new \InvalidArgumentException('The --spc-sha256 option must be a SHA-256 checksum, 64 hexadecimal characters.');
+        }
+
+        $input->setArgument('phar-path', Path::makeAbsolute($input->getArgument('phar-path'), getcwd() ?: PathHelper::getRoot()));
+    }
+
+    private function downloadSPC(string $spcSourceUrl, string $spcBinaryDestination, SymfonyStyle $io, string $expectedChecksum): void
+    {
+        $response = $this->httpClient->request('GET', $spcSourceUrl);
+        $contentLength = $response->getHeaders()['content-length'][0] ?? 0;
+
+        // The Windows release is a bare executable, the others are tar.gz archives
+        $isArchive = str_ends_with($spcSourceUrl, '.tar.gz');
+        $spcTarGzDestination = $isArchive ? $spcBinaryDestination . '.tar.gz' : $spcBinaryDestination;
+        $outputStream = fopen($spcTarGzDestination, 'w');
+        $progressBar = $io->createProgressBar((int) $contentLength);
+
+        if (false === $outputStream) {
+            throw new \RuntimeException(\sprintf('Failed to open file "%s" for writing.', $spcBinaryDestination));
+        }
+
+        foreach ($this->httpClient->stream($response) as $chunk) {
+            fwrite($outputStream, $chunk->getContent());
+            $progressBar->advance(\strlen($chunk->getContent()));
+        }
+
+        fclose($outputStream);
+        $progressBar->finish();
+        $io->newLine();
+
+        $checksum = (string) hash_file('sha256', $spcTarGzDestination);
+        if (!hash_equals(strtolower($expectedChecksum), $checksum)) {
+            $this->fs->remove($spcTarGzDestination);
+
+            throw new \RuntimeException(\sprintf('The checksum of the static-php-cli archive downloaded from "%s" is "%s", but "%s" was expected. The archive has been discarded.', $spcSourceUrl, $checksum, $expectedChecksum));
+        }
+
+        $io->text('The checksum of the static-php-cli archive matches the expected one.');
+
+        if (!$isArchive) {
+            return;
+        }
+
+        $extractProcess = new Process(
+            command: ['tar', 'xf', $spcTarGzDestination],
+            cwd: \dirname($spcBinaryDestination),
+            timeout: null,
+        );
+
+        $io->text('Running command: ' . $extractProcess->getCommandLine());
+        $extractProcess->mustRun(static function (string $type, string $buffer): void {
+            echo $buffer;
+        });
+        chmod($spcBinaryDestination, 0o755);
+    }
+
+    private function installPHPBuildTools(string $spcBinaryPath, string $spcBinaryDir, SymfonyStyle $io): void
+    {
+        $installSPCDepsProcess = new Process(
+            command: [$spcBinaryPath, 'doctor', '--auto-fix'],
+            cwd: $spcBinaryDir,
+            timeout: null,
+        );
+        $io->text('Running command: ' . $installSPCDepsProcess->getCommandLine());
+        $installSPCDepsProcess->mustRun(static function (string $type, string $buffer): void {
+            echo $buffer;
+        });
+    }
+
+    private function downloadPHPSourceDeps(string $spcBinaryPath, mixed $phpExtensions, mixed $phpVersion, string $spcBinaryDir, SymfonyStyle $io): void
+    {
+        $downloadProcess = new Process(
+            command: [
+                $spcBinaryPath, 'download',
+                '--for-extensions=' . $phpExtensions,
+                '--with-php=' . $phpVersion,
+                '--prefer-pre-built',
+            ],
+            cwd: $spcBinaryDir,
+            timeout: null,
+        );
+        $io->text('Running command: ' . $downloadProcess->getCommandLine());
+        $downloadProcess->mustRun(static function (string $type, string $buffer): void {
+            echo $buffer;
+        });
+    }
+
+    /** @param list<string> $sapiOptions */
+    private function buildPHP(string $spcBinaryPath, mixed $phpExtensions, array $sapiOptions, mixed $os, string $spcBinaryDir, SymfonyStyle $io, bool $debug = false): void
+    {
+        $command = [
+            $spcBinaryPath, 'build', $phpExtensions,
+            ...$sapiOptions,
+        ];
+
+        // The option breaks the nmake command line of static-php-cli 2.8.x on
+        // Windows (a stray quote in its CFLAGS_MICRO), and nothing in Castor
+        // depends on the SAPI name
+        if ('windows' !== $os) {
+            $command[] = '--with-micro-fake-cli';
+        }
+
+        if ($debug) {
+            $command[] = '--debug';
+        }
+
+        $buildProcess = new Process(
+            command: $command,
+            cwd: $spcBinaryDir,
+            env: ('linux' === $os) ? [
+                'OPENSSL_LIBS' => '-l:libssl.a -l:libcrypto.a -ldl -lpthread',
+                'OPENSSL_CFLAGS' => \sprintf('-I%s/source/openssl/include', $spcBinaryDir),
+            ] : [],
+            timeout: null,
+        );
+        $io->text('Running command: ' . $buildProcess->getCommandLine());
+        $buildProcess->mustRun(static function (string $type, string $buffer): void {
+            echo $buffer;
+        });
+    }
+
+    /**
+     * The phar was built before the PHP CLI, so the PHP CLI is added to a copy
+     * of it. The PHP CLI does it itself: phar.readonly can only be disabled at
+     * startup, and the PHP running this command may be a static binary too.
+     */
+    private function createPharWithPHPCli(string $pharPath, string $phpCliPath, string $spcBinaryDir, SymfonyStyle $io): string
+    {
+        $pharWithPHPCliPath = $this->fs->tempnam($spcBinaryDir, 'phar-with-php-cli-', '.phar');
+        $this->fs->copy($pharPath, $pharWithPHPCliPath, true);
+
+        $addPHPCliProcess = new Process(
+            command: [
+                $phpCliPath, '-n', '-d', 'phar.readonly=0',
+                '-r', '$phar = new Phar($argv[1]); $phar->addFile($argv[2], $argv[3]); $phar[$argv[3]]->compress(Phar::GZ);',
+                '--', $pharWithPHPCliPath, $phpCliPath, PhpServerRunner::PHP_CLI_DIRECTORY . '/' . basename($phpCliPath),
+            ],
+            timeout: null,
+        );
+        $io->text('Running command: ' . $addPHPCliProcess->getCommandLine());
+        $addPHPCliProcess->mustRun(static function (string $type, string $buffer): void {
+            echo $buffer;
+        });
+
+        return $pharWithPHPCliPath;
+    }
+
+    private function mergePHPandPHARIntoSingleExecutable(string $spcBinaryPath, string $pharFilePath, string $appBinaryFilePath, string $spcBinaryDir, ?string $iniFile, SymfonyStyle $io): void
+    {
+        if (!$this->fs->isAbsolutePath($pharFilePath)) {
+            $pharFilePath = PathHelper::getRoot() . '/' . $pharFilePath;
+        }
+
+        $command = [
+            $spcBinaryPath,
+            'micro:combine', $pharFilePath,
+            '--output=' . $appBinaryFilePath,
+            '--with-ini-set', 'castor.static=1',
+        ];
+        if ($iniFile) {
+            if (!file_exists($iniFile)) {
+                throw new \InvalidArgumentException(\sprintf('The ini file "%s" does not exist.', $iniFile));
+            }
+            $iniFile = Path::makeAbsolute($iniFile, getcwd() ?: PathHelper::getRoot());
+            $command[] = '--with-ini-file=' . $iniFile;
+        }
+
+        $mergePHPandPHARProcess = new Process(
+            $command,
+            cwd: $spcBinaryDir,
+            timeout: null,
+        );
+
+        $io->text('Running command: ' . $mergePHPandPHARProcess->getCommandLine());
+        $mergePHPandPHARProcess->mustRun(static function (string $type, string $buffer): void {
+            echo $buffer;
+        });
+    }
+
+    private function setupSPC(string $spcBinaryDir, string $spcBinaryPath, SymfonyStyle $io, mixed $os, mixed $arch, string $spcVersion, ?string $spcChecksum): void
+    {
+        $this->fs->mkdir($spcBinaryDir, 0o755);
+
+        if ($this->fs->exists($spcBinaryPath)) {
+            $io->text(\sprintf('Using the static-php-cli (spc) tool from "%s"', $spcBinaryPath));
+
+            return;
+        }
+
+        $expectedChecksum = $spcChecksum ?? self::SPC_CHECKSUMS[$spcVersion]["{$os}-{$arch}"] ?? null;
+
+        if (null === $expectedChecksum) {
+            throw new \InvalidArgumentException(\sprintf('The checksum of the static-php-cli %s archive for %s-%s is not known: pass it with the --spc-sha256 option (the archives are published at https://github.com/crazywhalecc/static-php-cli/releases).', $spcVersion, $os, $arch));
+        }
+
+        $spcSourceUrl = 'windows' === $os
+            ? \sprintf('https://github.com/crazywhalecc/static-php-cli/releases/download/%s/spc-windows-x64.exe', $spcVersion)
+            : \sprintf('https://github.com/crazywhalecc/static-php-cli/releases/download/%s/spc-%s-%s.tar.gz', $spcVersion, $os, $arch);
+        $io->text(\sprintf('Downloading the static-php-cli (spc) tool from "%s" to "%s"', $spcSourceUrl, $spcBinaryPath));
+        $this->downloadSPC($spcSourceUrl, $spcBinaryPath, $io, $expectedChecksum);
+        $io->newLine();
+    }
+
+    private function getBinaryPath(InputInterface $input): string
+    {
+        // root is only known once the application booted
+        $binaryPath = $input->getOption('binary-path') ?? PathHelper::getRoot();
+
+        if (!Path::isAbsolute($binaryPath)) {
+            $binaryPath = Path::makeAbsolute($binaryPath, getcwd() ?: PathHelper::getRoot());
+        }
+
+        if (!is_dir($binaryPath)) {
+            return $binaryPath;
+        }
+
+        $p = new Process([\PHP_BINARY, $input->getArgument('phar-path'), 'list', '--format', 'json']);
+        $p->mustRun();
+        $appName = json_decode($p->getOutput(), true)['application']['name'];
+
+        return \sprintf(
+            '%s/%s.%s.%s%s',
+            $binaryPath,
+            $appName,
+            $input->getOption('os'),
+            $input->getOption('arch'),
+            'windows' === $input->getOption('os') ? '.exe' : '',
+        );
+    }
+
+    private function generatePHPBuildCacheKey(InputInterface $input): string
+    {
+        $c = hash_init('sha256');
+
+        foreach (['os', 'arch', 'php-version', 'php-extensions'] as $phpBuildOption) {
+            hash_update($c, (string) $input->getOption($phpBuildOption));
+        }
+
+        $phpExtensions = explode(',', (string) $input->getOption('php-extensions'));
+        sort($phpExtensions);
+        hash_update($c, implode(',', $phpExtensions));
+
+        hash_update($c, self::CACHE_VERSION);
+        hash_update($c, (string) $input->getOption('spc-version'));
+
+        // Kept short: on Windows, MSVC fails to open the sources whose path
+        // exceeds 260 characters, and the build directory is part of them
+        return substr(hash_final($c), 0, 16);
+    }
+}

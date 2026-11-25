@@ -1,0 +1,757 @@
+# CHANGELOG
+
+## Not released yet
+
+### Features
+
+* Add a `serve_php()` function to start the built-in web server of PHP from a task
+* Add a `--php-cli` option to `castor compile` to embed a PHP CLI in the binary, so `serve_php()` works without PHP installed
+* Add a `register_plugin()` function to expose the tasks, contexts and listeners of a Composer package: the ones of the files it autoloads, or of the features it declares in the `extra.castor.features` section of its `composer.json` file, with an optional prefix for the namespace of its tasks. A plugin no longer needs a `castor.php` file
+* Offer to add `register_plugin()` to `castor.php` when `castor composer require` installs a plugin, or tell how to do it
+* Read the `composer.json` file of a package of type `castor-plugin` in its own repository, when there is no `castor.composer.json` file: the packages of its `require` section are installed in `.castor/vendor/` and locked in `castor.composer.lock`, and its files are autoloaded from there
+* Look for the package given to `register_plugin()`, `import()` or `mount()` in the vendor directories of the mounted directories too, so a mounted directory can import the packages of its own `castor.composer.json`
+
+### Deprecations
+
+* Deprecate loading the tasks, contexts and listeners of the files a package autoloads when it is not registered: register it with `register_plugin('vendor/package')`, Castor 2.0 will only load them then
+* Deprecate `import('composer://vendor/package')` and `mount('composer://vendor/package')` in favor of `register_plugin('vendor/package')`, which does not load the `castor.php` file of the package unless it declares it in a feature, and does not run its tasks in the directory of the package
+
+### Fixes
+
+* Write the messages of Castor (logs, deprecations, errors, update reminder, remote packages progress, `check()` and `wait_for*()` statuses, its questions) to the error output, so they no longer end up in the output of a task piped to another command or redirected to a file
+* Support OpenCode v2 in `llm_ask()` and `llm_run()`, which now require OpenCode 2 or later: OpenCode v1 is no longer supported. Castor runs OpenCode with `--standalone`, so that it knows the read-only agent of Castor instead of failing with `Agent not found: "castor-read-only"`, and reads the environment of the context instead of the one of its background service. The agents of OpenCode are proposed again when choosing the CLI
+* Give the prefix and the working directory of `mount('composer://vendor/package', 'prefix')` to the tasks of the files the package autoloads, which were added to the root application
+
+## 1.9.1 (2026-10-29)
+
+### Features
+
+* Document how to install Castor with mise
+* Document the functions and attributes in their PHPDoc, and in `.castor.stub.php` with a link to the documentation
+* Document how to autoload the classes of the tasks with `castor.composer.json`, in the documentation and in `.castor.stub.php`
+
+### Fixes
+
+* Refuse to self-update a Castor installed with mise, and suggest `mise upgrade github:jolicode/castor` instead
+* Keep the leading `*` of long PHPDoc descriptions in `.castor.stub.php`
+* Add the parent classes to `.castor.stub.php`, so inherited methods like `io()->writeln()` are known
+* Do not load the castor file in `castor self-update`, so `guard_min_version()` cannot block the update, and do not suggest updating during the update
+* Make the packages of a mounted directory's `castor.composer.json` usable by its tasks
+* Honor `--no-remote` for the `castor.composer.json` of a mounted directory
+* Keep parsable outputs (`--format=xml`, completion script, ...) free of the update reminder, deprecations and remote packages progress
+* Ignore `--no-remote`, `--update-remotes` and `--format` when given to a task after `--`
+* Accept `--context` with `castor list`
+* Give the terminal size to the PTY of the processes, so they no longer fall back on 80 columns (only the size at the start of the command)
+* Resolve the relative paths of `castor.composer.json`, like the autoload ones, from its directory instead of the directory Castor runs from. They were broken when Castor first ran from a subdirectory, for a mounted directory, and for a `.castor/castor.composer.json`, whose paths are now relative to `.castor/`
+
+## 1.9.0 (2026-10-20)
+
+### Features
+
+* Stop the task when a process is interrupted by a `CTRL+C`, even when the failures are allowed (`withAllowFailure()`, `exit_code()`, `toInteractive()`, ...), with a short warning and the exit code `130`. A process with the terminal (TTY) - like `docker run -it` - may get the `CTRL+C` alone: the task used to carry on after its exit code `130`. Trap `SIGINT` with `withTrappedSignals()` to keep this behavior
+* Wait 3 days after a release is published before reminding the users to update
+* Organize the output of the functions given to `parallel()` when they are named: each one becomes a job, shown as a block with a spinner and its last lines in an interactive terminal, or with its lines prefixed by its name elsewhere. The values returned by named functions are now keyed by their name, and mixing named and unnamed functions is rejected
+* Add the `llm_ask()` function to ask a question to a LLM and get its answer: Castor runs, in its non-interactive and read-only mode, one of the AI CLIs already installed and logged in on the machine (Claude Code, Codex, OpenCode, Gemini CLI, GitHub Copilot CLI, Mistral Vibe, ...), chosen at the first call of the run by default. The `CASTOR_LLM` environment variable and the new `castor:llm:configure` command choose the CLI, its model and its agent once and for all, and the new `castor:llm:debug` command shows the resulting configuration
+* Add the `llm_run()` function to let a LLM work on the project: the AI CLI is run in its non-interactive mode, allowed to modify the files and to run commands, and its final answer is returned
+* Ship the `dom` extension in the static binaries, to read and modify XML and HTML documents (`DOMDocument`, `Dom\XMLDocument`, `Dom\HTMLDocument`, ...) in the tasks
+
+### Deprecations
+
+* Deprecate the `CASTOR_USE_SECTION` environment variable: name the functions given to `parallel()` to organize their output instead
+
+### Fixes
+
+* Exit with the code 128 + the number of the signal (`130` for a `CTRL+C`) instead of `0` when a signal stops Castor: a `CTRL+C` did not stop `castor build && castor deploy`
+* Pause once per round in `parallel()` instead of 20ms per running process, which slowed it down as the number of processes grew
+* Install the binary with mode `755` in the installer, instead of `700` since 1.8.0: the binary is downloaded to a private temporary file, so an installation by root in a system directory like `/usr/local/bin` left it unreadable and not executable by the other users
+* Use directory name of a castor file when using the `--castor-file` option instead of the current working directory
+* Detect a non-interactive environment when `/dev/tty` can't be opened, instead of only checking its permissions: without a controlling terminal (`setsid`, a nested process), `supportsInteraction()` returned `true` and the TTY mode then failed to start the process
+
+## 1.8.1 (2026-09-21)
+
+### Fixes
+
+* Revert passing the script run by `run_php()` as an argument (1.8.0), and give it back to the Castor process through the `CASTOR_PHP_REPLACE` environment variable: the argument was removed from `argv` before the script ran, so the tools restarting themselves by re-executing the PHP binary with their own command line (PHPStan, Rector, `composer/xdebug-handler`, ...) ran Castor instead of themselves. The environment variable survives such a restart, whatever the command line the tool builds
+
+## 1.8.0 (2026-09-18)
+
+### Features
+
+* Add `self-update` command to update Castor to the latest version
+* Publish a `snapshot` pre-release of the `main` branch on each push, installable with the installer `--version=snapshot` option or `castor self-update --snapshot`
+* Phars and static binaries built from a commit that is not a release now report a snapshot version, like `v1.7.0-14-g4531440`
+* Add a `withTrappedSignals()` method on the context, to forward the signals received by Castor (like the `SIGINT` of a `CTRL+C`) to the process being run, instead of interrupting Castor itself
+* Publish a static binary for Windows and support `--os=windows` in `castor:compile`
+* Allow `mount()` to mount a remote Composer package (`mount('composer://org/repo')`), like `import()` already did, with its own namespace prefix and working directory
+
+### Security
+
+* Publish [artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) for the phars and static binaries, and verify them in the installer, in `self-update` and in `castor:repack` when the GitHub CLI is installed and authenticated
+* Restrict the file name chosen by the server in `http_download()`: only the last segment of the `Content-Disposition` file name (or of the URL path) is kept, so the download always lands in the project directory
+* Never download the remote packages during a shell completion: the packages already installed are used, and the completion goes on without the remote imports when there is none
+* Publish a `SHA256SUMS` file, attested too, with each release and the snapshot pre-release, and verify the checksum of the downloaded binary in `self-update`
+* Only accept attestations signed by the Artifacts workflow when verifying the provenance of a binary, and skip the verification with a GitHub CLI too old to know about attestations instead of failing
+* Verify the SHA-256 checksum of the static-php-cli archive downloaded by `castor:compile`: the checksums of the default `--spc-version` are known, any other version needs the new `--spc-sha256` option
+* Verify the checksum of the binary downloaded by the installer against the `SHA256SUMS` file of the release, download it to a private temporary file removed whatever happens, and read the whole installer script before running anything
+* Prefer the PHP zip extension over the zip binary in `zip()` when a password is given: the binary gets the password as a command line argument, readable by every user of the machine while the archive is created. `zip_binary()` still does, and now warns about it
+* Pass the script run by `run_php()` to the Castor process as an argument instead of the `CASTOR_PHP_REPLACE` environment variable, which made any Castor process include an arbitrary file when set in its environment
+* Refuse a Castor phar without provenance attestation in `castor:repack`, like `self-update` does, unless the new `--allow-unattested` option is passed for a release published before attestations existed
+* Derive the key of `encrypt_with_password()` and `encrypt_file_with_password()` with the "moderate" limits of libsodium (Argon2id, 3 passes, 256 MiB) instead of the "interactive" ones, and store the limits in the encrypted payload. Content encrypted by previous versions is still decrypted, but content encrypted by this version needs it, or a later one, to be decrypted
+
+### Deprecations
+
+* Not defining the `CASTOR_USE_CHDIR` constant is deprecated. Add `defined('CASTOR_USE_CHDIR') || define('CASTOR_USE_CHDIR', true);` at the top of your `castor.php` to opt in (the guard keeps a mounted or imported `castor.php` from redefining it): Castor then changes its own current directory to the working directory of the context, so `fs()`, `finder()` and the raw PHP functions (`mkdir()`, `unlink()`, `file_get_contents()`, ...) resolve relative paths where `run()` executes, instead of wherever `castor` was invoked from. It follows `with(workingDirectory: ...)` too, and is restored when the block ends. This becomes the default in Castor 2.0. Define the constant to `false` to keep the current behavior without the deprecation.
+
+    Once enabled, a relative path given as a CLI argument (`castor castor:compile foo.phar`, task arguments, ...) is resolved from the project root rather than from the directory you invoked `castor` in, which matters when you run Castor from a subdirectory.
+
+### Fixes
+
+* Resolve the remote packages of `castor.composer.json` against the packages bundled with Castor, declared to Composer as metapackages standing for the versions Castor ships: a package Castor ships is not installed a second time in `.castor/vendor`, and a package requiring a version Castor does not ship fails at install time with an explanation, instead of Castor crashing at runtime on a mix of the two versions. In `castor.composer.lock`, these packages follow the versions of the running Castor, and setting `extra.castor.bundled-packages` to `false` in `castor.composer.json` opts out
+* Quote the remote `path` of `ssh_run()`, and reject a `host`, `user`, `jump_host`, `path_private_key` or `multiplexing_control_path` containing a shell metacharacter: they end up in a local shell command line, so a value coming from user input could run a command instead of opening a connection
+* Pass the container name of `wait_for_docker_container()` to `docker` as an argument instead of building a shell command with it
+* Extract the watcher binary used by `watch()` in the phar and static builds to the user cache directory, under the Castor version, instead of a fixed path in the system temporary directory shared by all users, and replace it when its content is not the expected one
+* Create the cache directory readable by its owner only (mode `0700`), and restrict an existing one, as the cache may hold data written by the tasks; honor `XDG_CACHE_HOME` for its default location, and fall back to a per-user directory in the system temporary directory, instead of one shared by all users, when the home directory cannot be determined
+* Fix architecture detection on Linux ARM64 (`aarch64`), which made the watcher and the update hints pick the amd64 binaries
+* Fix `run()` ignoring the timeout when executed inside `parallel()`: the process was waited for in its own fiber loop, so Symfony's timeout check never ran and the process could run forever
+* Fix `with()` leaking its context between fibers running under `parallel()`: since the current context was tracked globally, a fiber resuming or calling `with()` while another one was suspended inside its own `with()` block could make it resume with the wrong context, and the wrong context could even survive `parallel()` itself
+* Fix `import()` of a remote Composer package changing the working directory of the tasks it defines: only an explicit `mount()` should do that
+
+## 1.7.0 (2026-08-03)
+
+### Features
+
+* Add `dispatch()` and `event_dispatcher()` functions to dispatch events and access the event dispatcher
+* Add `mountPath` and `isRootMount` properties to `FunctionsResolvedEvent`, so listeners can tell the root application apart from mounted ones (the event is dispatched once per mount)
+
+### Fixes
+
+* Fix `enable_strict_check` and `password_authentication` ssh options being ignored
+* Fix `AsArgsAfterOptionEnd` not validating arguments properly: extra arguments given without a `--` were silently dropped instead of raising an error, and required arguments given after `--` were not detected as missing
+* Fix `-c`/`--context` being wrongly parsed from arguments passed after `--`, causing an unrelated `Context "..." not found` error
+* Prevent the `AsArgsAfterOptionEnd` attribute from being used on more than one parameter of the same task
+* Turn the `SshOptions` type alias into a `@phpstan-type` declared on `SshRunner`, so it resolves without any PHPStan configuration
+* Ship a default `ContextData: 'array<string, mixed>'` PHPStan type alias in `extension.neon`, so projects that do not declare their own context data shape no longer get `class.notFound` errors on `Context::$data` and `variable()`. Declaring the alias in your own `phpstan.neon` still takes precedence, and is now documented in the [context documentation](https://castor.jolicode.com/getting-started/context/#typing-the-context-data)
+* Fix watcher to use correct binary on Linux ARM64
+* Fix `watch()` failing when given an array of paths
+
+## 1.6.1 (2026-07-02)
+
+### Features
+
+* Display a nice message when the user is using an unsupported PHP version (8.2 or 8.3) and suggest to use the static binary instead
+
+## 1.6.0 (2026-06-30)
+
+### Features
+
+* Drop support for PHP 8.2 and 8.3, minimum supported version is now PHP 8.4
+* Remove castor header and upgrade output when running inside an ai agent
+* Add support for `.castor.context` file to set the default context (lowest precedence after `--context` flag and `CASTOR_CONTEXT` env var)
+
+### Security
+
+* Harden the security of our GitHub Actions Workflows
+
+### Fixes
+
+* Fix option mode detection from Symfony command definition
+
+### Internal
+
+* Upgrade to Symfony 8.1
+
+## 1.5.0 (2026-05-27)
+
+### Features
+
+* Add link to the task definition in the help of the task
+
+### Fixes
+
+* Fix usage of `#[AsArgsAfterOptionEnd]`, CLI arguments are not mandatory anymore, and PHP parameters can be optional with default value
+* Fix implementation of `Context::supportsInteraction()`
+
+### Security
+
+* Update all PHP vendor with security issue
+
+## 1.4.0 (2026-04-28)
+
+### Features
+
+* Add `directory` and `filter` parameters to `#[AsPathArgument]` and `#[AsPathOption]` attributes to improve autocomplete
+* Add `input` option to Context to pass data to process stdin (useful for sensitive data like passwords)
+* Add `Context::supportsInteraction()` / `Context::withSupportsInteraction()` to expose whether the surrounding environment supports interactive commands (auto-detected from `CI` env var and STDIN being a TTY); `Context::toInteractive()` now throws a `LogicException` when called in a non-interactive environment, with `toInteractive(throwOnNonInteractiveEnv: false)` to bypass
+
+### Fixes
+
+* Fix installer to better handle invalid --install-dir option
+
+### Internal
+
+* Update all PHP vendor
+
+## 1.3.0 (2026-03-06)
+
+### Features
+
+* Allow to compile castor with PHP 8.5
+* Castor static binaries are now compiled with PHP 8.5
+* Rework how repacking is done. It's no longer needed to require `jolicode/castor` before repacking
+
+### Internal
+
+* Update SPC version to v2.8.2
+
+## 1.2.0 (2026-02-10)
+
+### Features
+
+* Add a `terminal()` function to get terminal properties
+* Add a `#[AsArgsAfterOptionEnd]` attribute to get all arguments after `--` delimiter
+
+### Fixes
+
+* Do not generate stub if no castor file, also check for completion command name
+
+### Internal
+
+* Update all PHP vendor
+
+## 1.1.0 (2025-11-26)
+
+### Features
+
+* Allow to specify directory where to output repacked phar
+* Do not ask confirmation when explicitly using `castor init` command
+* Allow to pass a callback when using the `run_php` function (similar to the `run` function)
+* Add a new `--castor-file` option to specify a custom root file when using the `castor` command
+* Add a `slug()` function to slugify strings
+* Display installation method/path in `castor debug`
+* Add support for PHP 8.5 (except for static binaries which are not available yet)
+
+### Fixes
+
+* Use correct working directory when using the `castor execute` command.
+* Fix infinite loop when executing `castor` with `castor execute jolicode/castor@castor`
+* Fix `--castor-file` option parsing
+* Fix the update instructions when using static binaries
+* Fix remote composer working directory, forcing relative paths to have "../" prefix
+* Allow to run Symfony commands even with the static binaries
+* Force the `SCRIPT_FILENAME` env var when using `run_php()` to avoid issues with some PHP scripts
+* Fix `--context` to take precedence over`CASTOR_CONTEXT` env var
+* Fix `CASTOR_CONTEXT=default` to work as expected
+
+### Internal
+
+* Provide PHP 8.4 in the static binaries
+* Update all PHP vendor
+* Upgrade SPC version to v2.7.5
+* Use a `PhpRunner` service instead of static functions to run PHP files
+
+### Deprecations
+
+* Deprecate `DISABLE_VERSION_CHECK` environment variable in favor of `CASTOR_DISABLE_VERSION_CHECK`
+
+### Documentation
+
+* Rework the installation methods documentation
+* Rework the Basic Usage documentation
+* Add documentation for arguments/options of compile & repack commands
+
+## 1.0.0 (2025-10-10)
+
+* Remove BC-layer for Castor 0.x
+
+## 0.29.0 (2025-10-09)
+
+### Features
+
+* Add capability to repack with a custom logo from external PHP file
+
+### Internal
+
+* Upgrade supported version of SPC > 2.5.0
+* Upgrade GitHub action runner to MacOS 14
+
+## 0.28.0 (2025-09-24)
+
+### Features
+
+* Add version parameter to installer
+* Improve init command with more clear messages
+* Fill gitignore with castor stub on init
+
+### Fixes
+
+* Do not use 💩 in namespace
+
+### Internal
+
+* Update all PHP vendor
+
+## 0.27.0 (2025-09-02)
+
+### Fixes
+
+* Fix using `castor exec` without a `castor.php` file
+
+### Features
+
+* Add `iconv` extension to the static binary
+* Support having `--` option with raw tokens which avoid interpretation of the next arguments
+* Allow to set `memory_limit` dynamically via `CASTOR_MEMORY_LIMIT` environment variable
+
+## 0.26.0 (2025-07-11)
+
+### Features
+
+* Introduce remote execution command
+* Load castor context in autocomplete mode
+
+## 0.25.0 (2025-06-13)
+
+### Features
+
+* Allows repack without Castor logo e.g. `castor repack --no-logo`
+* Add static build for the Linux arm64 architecture
+
+### Fixes
+
+* Fix context parsing, especially when using a task alias
+* Do not load user files when displaying version
+* Add a workaround to fix a bug in PHP 8.4, proxy object, and repacked application
+
+### Internal
+
+* Update all PHP vendor
+* Fix some CI issues (use github tokens)
+
+## 0.24.0 (2025-04-25)
+
+### Features
+
+* Improve `decrypt_file_with_password()` with smart `.enc` extension handling
+  and file overwrite protection
+* Add `zip()`, `zip_binary()`, and `zip_php()` functions to create password-protected
+  zip archives with various compression methods and configurable compression levels
+
+### Fixes
+
+* Add proper `.enc` extension to files encrypted with `encrypt_file_with_password()`
+
+### Internal
+
+* Add tests for `decrypt_file_with_password()` and `encrypt_file_with_password()`
+
+## 0.23.0 (2025-03-06)
+
+### Features
+
+* Add `$force` parameter to the `cache()` function to force recomputing the value
+* Add `getAttributes()` method to `TaskCommand` to get all or specific attributes
+* Add `CASTOR_MEMORY_LIMIT` environment variable to set the memory limit when
+  using the `run_php()` function
+* Add support for static binaries when installing castor with the installer
+
+### Fixes
+
+* Ignore `null` env variable when running process
+* Use an env var when using `run_php()` to avoid conflict with php script reexecution
+* Rename `run_phar()` to `run_php()` to express better that it can run any PHP file
+
+### Internal
+
+* Update all PHP vendor
+* Use Symfony 7.x
+* Drop support for PHP 8.1
+
+## 0.22.1 (2025-01-31)
+
+### Fixes
+
+* Fix context name when getting it from the registry
+* Fix `--context` option ignored when another option presence
+
+## 0.22.0 (2024-12-30)
+
+### Features
+
+* Add `encrypt_with_password()`, `decrypt_with_password()`,
+  `encrypt_file_with_password()`, and `decrypt_file_with_password()` functions to
+  encrypt and decrypt data
+* Add `AsPathArgument` and `AsPathOption` attributes to handle autocompletion of
+paths in arguments and options
+
+### Fixes
+
+* Add more missing vendor classes into stubs
+* Add support for disabling stubs generation (with `CASTOR_GENERATE_STUBS=0`
+  environment variable)
+
+### Documentation
+
+* Document all the environment variables supported by Castor
+
+## 0.21.0 (2024-11-19)
+
+### Features
+
+* Better rendering of run errors
+* Add `check()` function to ensure requirements are met
+* Add `ProblemException` to handle problems in a more structured way
+* Add official support for symfony/string and symfony/var-dumper functions
+
+### Internal
+
+* Rework the releasing
+
+## 0.20.0 (2024-11-13)
+
+### Features
+
+* Add support for PHP 8.4
+* Force fetching the last version when guard min is used to display more information for user
+* Add the ability to set a default task when calling `castor` without any arguments
+
+### Fixes
+
+* Boot the kernel even when using composer command
+
+### Vendor
+
+* Update all PHP vendor
+
+## 0.19.1 (2024-11-04)
+
+### Fixes
+
+* Add GetRawTokenTrait definition in stubs
+* Fix stubs to better support templates phpdoc and clean stubs file
+* Fix deprecations when using ssh functions
+
+## 0.19.0 (2024-10-29)
+
+### Features
+
+* Add `Context::withVerboseArguments()` method to pass verbose arguments to the underlying process when needed
+* Add support for custom php.ini in compile command
+* Do not validate commande options/args as soon as `#[AsRawTokens] is used
+* Update all PHP vendor
+* Add partial support for PHP 8.4 (`ssh_()` functions are not supported yet)
+
+### Fixes
+
+* Re-active `static-darwin-arm64` binary build
+* Fix stubs generation to use fully qualified class names even in phpdoc
+
+### Vendor
+
+* Update SPC version to v2.3.5
+
+## 0.18.2 (2024-09-03)
+
+* Do not build static-darwin-arm64 binary anymore (may be temporary)
+
+## 0.18.1 (2024-09-03)
+
+* Fix BC layer for `fingerprint()` function
+* Fix repack command work without .castor folder
+
+## 0.18.0 (2024-08-27)
+
+### Features
+
+* Add `Castor\CommandBuilder\CommandBuilderInterface` which allows to build nice API for command line software
+* Add `Context::toInteractive()` method
+* Add `Castor\Event\ContextCreatedEvent` to allow updating the context after it is created
+* Add `run_phar()` function to run a phar file in all contexts
+
+### Vendor
+
+* Update SPC version to 2.3.0
+* Update all PHP vendor
+
+### Fixes
+
+* Add an id parameter to `fingerprint()` to avoid bad cache hit
+* Fix completion when update is available
+* Fix repack when there is composer dependencies to castor
+* Fix wait_for_docker_container example to avoid checking previous docker logs
+
+### Deprecations
+
+* Deprecate all arguments in `run()` function that are already in the context.
+    Examples:
+
+    ```diff
+    {
+    -    run(['composer', 'install'], workingDirectory: __DIR__);
+    +    run(['composer', 'install'], context: context()->withWorkingDirectory(__DIR__));
+    }
+    ```
+
+* Deprecate `suggestedValues` property in `AsArgument` and `AsOption` attributes. Use `autocomplete` property instead.
+
+## 0.17.1 (2024-05-31)
+
+### Fixes
+
+* Fix update instruction
+
+## 0.17.0 (2024-05-27)
+
+### Features
+
+* Add `Castor\Event\AfterBootEvent` to perform action when the application is ready
+* Add `Symfony\Component\Finder\SplFileInfo` to the stubs
+
+### Fixes
+
+* Map console verbosity level to default context, even when no context is defined
+
+## 0.16.0 (2024-05-22)
+
+### Features
+
+* Totally rework the import feature. Castor use special `castor.composer.json`
+  file to handle imports. This fixes many bugs and issues with the previous
+* SSH
+    * Marked SSH features as stable
+    * Add `?callable $callback = null` param to `ssh_*` functions to manipulate
+    output
+    * Add support for SSH connection without specifying a user
+* Add `context()` function in expression language to enable a task
+* Add `notificationTitle` property to `Context` to set the application name for
+  notifications title
+* Add `http_download()` function to simplify the process of downloading files
+
+### Minor
+
+* Better handling of notification errors and exceptions
+* Better log output in debug mode (`-vvv`)
+* Changed the behavior of `notify` parameter in `Context` to be a nullable boolean.
+    * `null` is now the default value (only user notifications are displayed).
+    * `true` to enable notifications globally (user and Castor generated notifications)
+    * `false` to disable them globally
+* `.castor.stub.php` is now generated in same location where `castor.php` is located
+
+### Deprecations
+
+* Deprecate `Castor\GlobalHelper` class. There are no replacements. Use raw
+  functions instead
+* Deprecate `AfterApplicationInitializationEvent` event. Use
+  `FunctionsResolvedEvent` instead
+* Deprecate `request()` in favor of `http_request()` for consistency with newly
+  introduced `http_*` function
+
+### Fixes
+
+* Fix root location when repacking application
+
+## 0.15.0 (2024-04-03)
+
+### Features
+
+* Add support for importing remote functions and tasks
+* Add a bash installer to ease installation
+* Distribute static binaries `castor.darwin-arm64` automatically with the
+  release
+* Add support for running Castor on Linux arm64 and distribute the binary
+  `castor.linux-arm64.phar` automatically with the release
+* Add an option `ignoreValidationErrors` on `AsTask` attribute to ignore
+  parameters & options validation errors
+* Add support for dynamic autocomplete task arguments/options
+* Add support for merging an application `box.json` config file used by
+  `castor:repack` command
+* Find root directory by looking for a `.castor/castor.php` file
+* Allow stub file to be in `.castor/.castor.stub.php`
+
+### Fixes
+
+* Fix issue with PTY on windows, it's now always disabled
+* Fix issue when finding root dir on windows
+* Fix issue on SymfonyTask creation
+
+### Deprecations
+
+* Deprecate loading all PHP files from `[ROOT_DIR]/castor`
+* Deprecate `Context::withPath()` in favor of `Context::withWorkingDirectory()`
+* Deprecate `path` argument in `capture()`, `exit_code()`, `run()`, `with()` in
+  favor of `workingDirectory`
+* Deprecate `Castor\TaskDescriptorCollection` in favor of
+  `Castor\Descriptor\TaskDescriptorCollection`
+* Deprecate `Castor\HasherHelper` in favor of `Castor\Castor\HasherHelper`
+* Deprecate `Castor\PathHelper` in favor of `Castor\Castor\PathHelper`
+
+## 0.14.0 (2024-03-08)
+
+* Add a `yaml_dump()` function to dump any PHP value to a YAML string
+* Add a `yaml_parse()` function to parse a YAML string to a PHP value
+* Remove the default timeout of 60 seconds from the Context
+* Add a `recursive` parameter to the `withData()` method of `Context` to allow
+  recursive merging for nested arrays
+* Add an `open()` function to open a file or URL in the default application
+* Add `bool` return type to `fingerprint()` function to indicate if the callable
+  was run
+
+## 0.13.1 (2024-02-27)
+
+* Fix instruction for downloading new castor version as a phar
+
+## 0.13.0 (2024-02-23)
+
+* Add a `compile` command that puts together a customizable PHP binary with a
+  repacked castor app into a static binary
+* Distribute static binaries `castor.linux.amd64` and `castor.darwin.amd64`
+  automatically with the release
+* Compile watcher and phar for arm64 on macOS, and distribute them with the
+  release
+* Add `ProcessStartEvent` and `ProcessTerminateEvent` events
+* Allow to listen to the symfony console events
+* Set the process title according to the current application name and task name
+* Deprecates `add_context()` function, use  `AsContextGenerator` attribute
+  instead
+* Allow to get null instead of throwing an exception when calling `task(true)`
+  without a current task
+* Ignore some low level env vars in runnable command showed in logs
+* Fix section output to work on Windows
+
+## 0.12.1 (2024-02-06)
+
+* Fix issue with symfony console (color doesn't work in tmux or screen)
+
+## 0.12.0 (2024-02-06)
+
+* Add a `debug` command
+* Add `guard_min_version()` function to ensure a minimum version of Castor is used
+* Add `wait_for_http_response()` function for a more generic response check
+* Add `wait_for_docker_container()` function to wait for a docker container to be ready
+* Add `AsSymfonyTask` attribute to map Symfony Command
+* Add `Context->name` property (automatically set by the application)
+* Add an error handler, and wire the logger to it so display deprecation notices
+* Edited the duration of update check from `60 days` to `24 hours`
+* Revise the usage of the terms `command` and `task` for consistency through code and docs.
+* [BC Break] Remove `callable $responseChecker` parameter from `wait_for_http_status()`
+* [BC Break] The event `AfterApplicationInitializationEvent` second arguments is now a
+  `TaskDescriptorCollection`, and the event is emitted after the context configuration
+
+## 0.11.1 (2024-01-11)
+
+* Fix issue when using `ContextRegistry::getCurrentContext()` without setting first a context
+* Calling `ContextRegistry::getCurrentContext()` without `setCurrentContext()`
+  is deprecated. Pass a `$context` instead to the function, or set a current
+  context before.
+
+## 0.11.0 (2024-01-11)
+
+* Add `AsListener` attribute to register an event listener
+* Add `wait_for()`, `wait_for_port()`, `wait_for_url()`, `wait_for_http_status()` functions
+* Allow to override `AsTask` and `AsContext` attributes
+* Add `force` argument to `fingerprint()` method to force run the callable, even if fingerprint is same
+* Fix directory for fingerprinted test
+* [BC Break] Remove almost all setters in the GlobalHelper class
+* Refactor the documentation
+
+## 0.10.0 (2023-11-14)
+
+* Add `ssh_upload()` and `ssh_download()` functions to upload/download files via SSH
+* Rename `ssh()` to `ssh_run()`
+* Allow to set default context with an env variable
+
+## 0.9.1 (2023-10-09)
+
+* Fix castor application version
+* Fix typo in `run()` error message
+
+## 0.9.0 (2023-10-09)
+
+* Add `fingerprint()` function to condition code execution based on some hash changes
+* Better handle default Symfony commands when no castor file exists yet
+* Add `-c` option to `castor` command to specify a context
+
+## 0.8.0 (2023-08-16)
+
+* Add `request()` and `http_client()` functions to make HTTP requests
+* Add support for disabling task dynamically
+* Add a `with` function to run logic with a specific context or parameters
+  without passing them to each `run` or other functions
+* Allow to get a context by its name using `$fooContext = context('foo')`
+* Experimental display with sections, allow better output when using parallel
+  function, enable it by by using `CASTOR_USE_SECTION=true castor [task]`
+* Display more information when running a process
+* Rename `get_exit_code()` to `exit_code()`
+* Rename `get_context()` to `context()`
+* Rename `get_input()` to `input()`
+* Rename `get_output()` to `output()`
+* Rename `get_application()` to `app()`
+* Rename `get_command()` to `task()`
+* Fix parallel when one of the callback fails, wait for the others to finish to
+  throw exception
+
+## 0.7.1 (2023-07-11)
+
+* Fix the `castor --version` command when there is no `.castor.php` file
+
+## 0.7.0 (2023-07-11)
+
+* Add support for re-packing a castor application into a new phar file
+* Fix the update command message to follow redirects with curl
+
+## 0.6.0 (2023-06-30)
+
+* Add support for registering `Context` programmatically
+* Add `load_dot_env()` function for loading the context's environment from a dotenv file
+* Add support for multiple paths in `watch()` function
+* Add `get_exit_code()` function to get a process exit code, even if it failed
+
+## 0.5.2 (2023-06-24)
+
+* Add documentation about installation in a Github Action
+* Add more classes in stubs
+
+## 0.5.1 (2023-06-22)
+
+* Fix curl download in installation instructions
+* Fix code on initial castor.php creation
+* Do not remove annotation from phar
+
+## 0.5.0 (2023-06-16)
+
+* Add support for signals handling
+* Add a way to type Context::$data
+
+## 0.4.1 (2023-06-13)
+
+* Allow to use the cache in the context creator
+* Add `onFailure` argument to the `capture()` function
+* Add `ExecutableFinder` in stubs
+
+## 0.4.0 (2023-06-12)
+
+* [BC Break] replace specials helpers arguments by dedicated functions
+* Add `capture()` function to easily run a process and returns the output
+* Add `cache()` and `get_cache()` function to easily cache something
+* Add `ssh()` function to run commands on remote server via SSH
+* Display warning and update instructions when a new version is available
+* Better error reporting when a call to `run()` fails or when `import()` is not possible
+* Fix stubs generation
+
+## 0.3.0 (2023-06-07)
+
+* Enhance the documentation
+* Enhance the first run experience
+
+## 0.2.0 (2023-06-02)
+
+* Add a way to get the `Command` instance in a task
+* Add support for better handling of option without value
+* Fix the stubs generation when castor is installed via composer
+* Fix the initial `castor.php` file generated for new projects
+* Fix `watch()` function
+
+## 0.1.0 (2023-05-21)
+
+* Initial release
+
+<!-- markdownlint-disable-file no-duplicate-heading -->

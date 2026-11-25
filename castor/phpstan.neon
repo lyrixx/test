@@ -1,0 +1,37 @@
+includes:
+    - extension.neon
+    - phpstan-baseline.neon
+
+parameters:
+    level: 8
+    paths:
+        - src
+        - examples
+        - tools/phpstan/src
+        - tests/autoload/loadme.php
+        - tools/example-plugin/src
+    tmpDir: 'var/phpstan/tmp'
+    inferPrivatePropertyTypeFromConstructor: true
+    # Defined by the user in their own castor.php, so its value is not fixed. The examples
+    # define it to true, which would otherwise make the check in ContextRegistry look constant.
+    dynamicConstantNames:
+        - CASTOR_USE_CHDIR
+    excludePaths:
+        analyse: []
+    typeAliases:
+        ContextData: '''
+            array{
+                name: string,
+                production: bool,
+                foo?: string,
+            }
+        '''
+    ignoreErrors:
+        -
+            identifier: missingType.generics
+
+services:
+    -
+        class: Castor\PHPStan\ProhibitCastorFunctionInClass
+        tags:
+            - phpstan.rules.rule

@@ -1,0 +1,333 @@
+<?php
+
+namespace Castor\Llm;
+
+use Castor\Context;
+use Castor\ContextRegistry;
+use Castor\Exception\LlmException;
+use Castor\Helper\PlatformHelper;
+use Castor\Runner\ProcessRunner;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
+use Symfony\Component\Process\ExecutableFinder;
+
+/**
+ * The LLM CLIs Castor knows, and which ones are installed.
+ *
+ * @internal
+ */
+class CliRegistry
+{
+    /**
+     * The plan agent of OpenCode may run commands, and the configuration of
+     * the user may allow it more: Castor defines its own agent, which may only
+     * read the files of the project.
+     */
+    private const OPENCODE_READ_ONLY_AGENT = 'castor-read-only';
+
+    /** @var list<Cli> */
+    private readonly array $clis;
+
+    /** @var array<string, ?string> The path of each CLI already looked up, by name */
+    private array $paths = [];
+
+    private readonly ExecutableFinder $executableFinder;
+
+    public function __construct(
+        private readonly ProcessRunner $processRunner,
+        private readonly ContextRegistry $contextRegistry,
+        private readonly string $rootDir,
+        private readonly LoggerInterface $logger,
+        ?ExecutableFinder $executableFinder = null,
+    ) {
+        $this->executableFinder = $executableFinder ?? new ExecutableFinder();
+
+        // In the order they are proposed
+        $this->clis = [
+            // On Windows, the commands may be run by the PowerShell tool instead of the Bash one
+            new Cli('claude', ['claude', '--print', '--output-format', 'text', '--no-session-persistence', Cli::OPTIONS_PLACEHOLDER], readOnlyArguments: ['--tools', ''], writeArguments: ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', 'PowerShell'], modelOption: '--model', agentOption: '--agent', models: ['fable', 'opus', 'sonnet', 'haiku']),
+            // The workspace-write sandbox has no network by default, and keeps the .git directory read-only
+            new Cli('codex', ['codex', 'exec', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--output-last-message', Cli::OUTPUT_FILE_PLACEHOLDER, Cli::OPTIONS_PLACEHOLDER, '-'], readOnlyArguments: ['--sandbox', 'read-only'], writeArguments: ['--sandbox', 'workspace-write', '--config', 'sandbox_workspace_write.network_access=true'], modelOption: '--model'),
+            // Without --auto, a permission that is not allowed by the configuration is rejected, which stops the agent.
+            // --auto does not lift a denied permission: the default agent of the user may be "plan", which denies the edits
+            // --standalone runs a private server instead of the background service, which keeps the environment
+            // of the process that started it: OPENCODE_CONFIG_CONTENT and the context are read, and the server
+            // stops with the CLI
+            new Cli('opencode', ['opencode', 'run', '--standalone', Cli::OPTIONS_PLACEHOLDER], writeArguments: ['--auto'], modelOption: '--model', agentOption: '--agent', readOnlyAgent: self::OPENCODE_READ_ONLY_AGENT, writeAgent: 'build', rejectedOptions: ['--server' => 'Castor runs OpenCode with its own server (--standalone), so that it reads the read-only agent of Castor and the environment of the context, which another server would ignore.']),
+            // In a non-interactive run, the model may leave the plan approval mode for the yolo one
+            new Cli('gemini', ['gemini', Cli::OPTIONS_PLACEHOLDER], readOnlyArguments: ['--approval-mode', 'plan'], writeArguments: ['--approval-mode', 'yolo'], modelOption: '--model', mayModifyProject: true),
+            // The URLs need --allow-all-urls in the prompt mode: they are allowed, as the network is for codex
+            new Cli('copilot', ['copilot', '--silent', Cli::OPTIONS_PLACEHOLDER], writeArguments: ['--allow-all-tools', '--allow-all-urls'], modelOption: '--model', agentOption: '--agent'),
+            new Cli('cursor-agent', ['cursor-agent', '--print', '--output-format', 'text', Cli::OPTIONS_PLACEHOLDER], readOnlyArguments: ['--mode', 'ask'], writeArguments: ['--force'], modelOption: '--model'),
+            // Both approve all the actions of the model in a non-interactive run
+            new Cli('amp', ['amp', Cli::OPTIONS_PLACEHOLDER, '--execute'], writeArguments: [], mayModifyProject: true),
+            new Cli('crush', ['crush', 'run', '--quiet', Cli::OPTIONS_PLACEHOLDER], writeArguments: [], mayModifyProject: true),
+            new Cli('qwen', ['qwen', Cli::OPTIONS_PLACEHOLDER], readOnlyArguments: ['--approval-mode', 'plan'], writeArguments: ['--approval-mode', 'yolo'], modelOption: '--model'),
+            new Cli('llm', ['llm', Cli::OPTIONS_PLACEHOLDER], modelOption: '--model'),
+            // "--prompt" without value reads the prompt on the standard input. Without --auto-approve, the
+            // actions needing an approval are denied in the programmatic mode
+            new Cli('vibe', ['vibe', '--trust', '--output', 'text', Cli::OPTIONS_PLACEHOLDER, '--prompt'], writeArguments: ['--auto-approve'], agentOption: '--agent', readOnlyAgent: 'plan'),
+        ];
+    }
+
+    /**
+     * @return list<Cli>
+     */
+    public function all(): array
+    {
+        return $this->clis;
+    }
+
+    /**
+     * The CLIs that can modify the project, for llm_run().
+     *
+     * @return list<Cli>
+     */
+    public function allSupportingWrite(): array
+    {
+        return array_values(array_filter($this->clis, static fn (Cli $cli): bool => $cli->supportsWrite()));
+    }
+
+    /**
+     * @param ?list<Cli> $clis Some CLIs, or all of them
+     *
+     * @return list<string>
+     */
+    public function getNames(?array $clis = null): array
+    {
+        return array_map(static fn (Cli $cli): string => $cli->name, $clis ?? $this->clis);
+    }
+
+    public function get(string $name): ?Cli
+    {
+        foreach ($this->clis as $cli) {
+            if ($cli->name === $name) {
+                return $cli;
+            }
+        }
+
+        return null;
+    }
+
+    public function getPath(Cli $cli): ?string
+    {
+        if (!\array_key_exists($cli->name, $this->paths)) {
+            $this->paths[$cli->name] = $this->executableFinder->find($cli->getBinary());
+        }
+
+        return $this->paths[$cli->name];
+    }
+
+    public function isInstalled(Cli $cli): bool
+    {
+        return null !== $this->getPath($cli);
+    }
+
+    /**
+     * @return list<Cli>
+     */
+    public function getInstalled(): array
+    {
+        return array_values(array_filter($this->clis, $this->isInstalled(...)));
+    }
+
+    /**
+     * The installed CLIs that can modify the project, for llm_run().
+     *
+     * @return list<Cli>
+     */
+    public function getInstalledSupportingWrite(): array
+    {
+        return array_values(array_filter($this->allSupportingWrite(), $this->isInstalled(...)));
+    }
+
+    /**
+     * The CLI proposed for llm_ask() when Castor lets the user choose: the
+     * first installed one that may not modify the project.
+     */
+    public function getDefault(): ?Cli
+    {
+        foreach ($this->getInstalled() as $cli) {
+            if (!$cli->mayModifyProject) {
+                return $cli;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The models the CLI can use, when it is cheap to know them.
+     *
+     * @return list<string>
+     */
+    public function listModels(Cli $cli): array
+    {
+        $models = $cli->models;
+
+        if ('opencode' === $cli->name) {
+            $models = [...$models, ...$this->captureLines(['opencode', 'models', '--standalone'])];
+        }
+
+        return array_values(array_unique($models));
+    }
+
+    /**
+     * The agents the CLI can use, when it is cheap to know them.
+     *
+     * @return list<string>
+     */
+    public function listAgents(Cli $cli): array
+    {
+        return match ($cli->name) {
+            'opencode' => $this->listOpencodeAgents(),
+            'claude' => $this->listClaudeAgents(),
+            default => [],
+        };
+    }
+
+    /**
+     * The environment variables the CLI needs to be read-only, for llm_ask(),
+     * added to the ones of the context. llm_run() needs none: the ones of the
+     * user are given as they are.
+     *
+     * @return array<string, string>
+     *
+     * @throws LlmException When the configuration the user gives to the CLI through these variables is invalid
+     */
+    public function getReadOnlyEnvironment(Cli $cli, ?Context $context = null): array
+    {
+        return match ($cli->name) {
+            'opencode' => ['OPENCODE_CONFIG_CONTENT' => $this->buildOpenCodeConfig($context ?? $this->contextRegistry->getCurrentContext())],
+            default => [],
+        };
+    }
+
+    /**
+     * The configuration given to OpenCode through the OPENCODE_CONFIG_CONTENT
+     * environment variable, with the one the user may already give this way.
+     */
+    private function buildOpenCodeConfig(Context $context): string
+    {
+        $config = new \stdClass();
+
+        // As for the process: the variable of the context wins over the one Castor runs with, and false unsets it
+        if ($userConfig = (string) ($context->environment['OPENCODE_CONFIG_CONTENT'] ?? PlatformHelper::getEnv('OPENCODE_CONFIG_CONTENT'))) {
+            // Decoded as objects, so that an empty object stays one
+            $config = json_decode($userConfig);
+
+            // OpenCode also accepts comments and trailing commas: rather than
+            // run it without the configuration of the user, Castor fails
+            if (!$config instanceof \stdClass) {
+                throw new LlmException('The OPENCODE_CONFIG_CONTENT environment variable must contain a JSON object, without comments nor trailing commas, so that Castor can add its read-only agent to it.');
+            }
+        }
+
+        $config->agent ??= new \stdClass();
+        $config->agent->{self::OPENCODE_READ_ONLY_AGENT} = [
+            'mode' => 'primary',
+            'description' => 'Reads the files of the project to answer, without modifying them nor running commands.',
+            // The last matching rule wins
+            'permission' => [
+                '*' => 'deny',
+                'read' => ['*' => 'allow', '*.env' => 'deny', '*.env.*' => 'deny', '*.env.example' => 'allow'],
+                'glob' => 'allow',
+                'grep' => 'allow',
+                'list' => 'allow',
+            ],
+        ];
+
+        return json_encode($config, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * The agents are Markdown files in the ".claude/agents" directory of the
+     * project and of the home directory, named after the agent.
+     *
+     * @return list<string>
+     */
+    private function listClaudeAgents(): array
+    {
+        $directories = [$this->rootDir . '/.claude/agents'];
+
+        if ($home = PlatformHelper::getEnv('HOME')) {
+            $directories[] = $home . '/.claude/agents';
+        }
+
+        $agents = [];
+
+        foreach ($directories as $directory) {
+            foreach (glob($directory . '/*.md') ?: [] as $file) {
+                $agents[] = basename($file, '.md');
+            }
+        }
+
+        return array_values(array_unique($agents));
+    }
+
+    /**
+     * The agents of OpenCode that may be chosen for "opencode run": the
+     * primary ones and the ones of the "all" mode, unless they are hidden.
+     *
+     * @return list<string>
+     */
+    private function listOpencodeAgents(): array
+    {
+        $output = implode("\n", $this->captureLines(['opencode', 'debug', 'agents', '--standalone']));
+        if ('' === $output) {
+            return [];
+        }
+
+        try {
+            $agents = json_decode($output, true, flags: \JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            $this->logger->warning('The agents of OpenCode cannot be read, they are ignored.', ['exception' => $e]);
+
+            return [];
+        }
+
+        if (!\is_array($agents)) {
+            return [];
+        }
+
+        $names = [];
+        foreach ($agents as $agent) {
+            if (\is_array($agent) && \is_string($agent['id'] ?? null) && \in_array($agent['mode'] ?? null, ['primary', 'all'], true) && true !== ($agent['hidden'] ?? false)) {
+                $names[] = $agent['id'];
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * @param list<string> $command
+     *
+     * @return list<string> The non-empty lines of the output, or nothing when the command fails
+     */
+    private function captureLines(array $command): array
+    {
+        $context = $this->contextRegistry->getCurrentContext()
+            ->withQuiet()
+            ->withAllowFailure()
+            ->withVerboseArguments([])
+            ->withTimeout(30)
+        ;
+
+        try {
+            $process = $this->processRunner->run($command, $context);
+        } catch (ProcessTimedOutException $e) {
+            $this->logger->warning(\sprintf('The command "%s" did not finish within %s seconds, its output is ignored.', implode(' ', $command), $e->getExceededTimeout()), ['exception' => $e]);
+
+            return [];
+        }
+
+        if (!$process->isSuccessful()) {
+            $this->logger->warning(\sprintf('The command "%s" failed with exit code %d, its output is ignored.', implode(' ', $command), $process->getExitCode() ?? 0));
+
+            return [];
+        }
+
+        return array_values(array_filter(array_map(trim(...), explode("\n", $process->getOutput())), static fn (string $line): bool => '' !== $line));
+    }
+}

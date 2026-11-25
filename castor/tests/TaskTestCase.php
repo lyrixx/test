@@ -1,0 +1,122 @@
+<?php
+
+namespace Castor\Tests;
+
+use Castor\Tests\Helper\OutputCleaner;
+use Castor\Tests\Helper\WebServerHelper;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Process\InputStream;
+use Symfony\Component\Process\Process;
+
+abstract class TaskTestCase extends TestCase
+{
+    public static string $castorBin;
+    public static string $castorCacheDir;
+    public static bool $binary = false;
+
+    public static function setUpBeforeClass(): void
+    {
+        WebServerHelper::start();
+
+        self::$castorBin = $_SERVER['CASTOR_BIN'] ?? __DIR__ . '/../bin/castor';
+        self::$castorCacheDir = $_SERVER['CASTOR_CACHE_DIR'] ?? '/tmp/castor-tests/cache';
+        if (!self::$castorCacheDir) {
+            throw new \RuntimeException('CASTOR_CACHE_DIR is not set or empty.');
+        }
+        self::$binary = 'application/x-executable' === mime_content_type(self::$castorBin);
+    }
+
+    /**
+     * @param array<string, string> $env
+     */
+    public function runTask(array $args, ?string $cwd = null, bool $needRemote = false, bool $needResetVendor = false, bool $needResetCache = true, ?string $input = null, array $env = []): Process
+    {
+        $coverage = $this->result()?->getCodeCoverage();
+
+        $extraEnv = [
+            'ENDPOINT' => $_SERVER['ENDPOINT'],
+            'CASTOR_CACHE_DIR' => self::$castorCacheDir,
+            'CASTOR_TEST' => 'true',
+            'CASTOR_DISABLE_AGENT_DETECTION' => 'true',
+        ];
+
+        if (!$needRemote) {
+            $extraEnv['CASTOR_NO_REMOTE'] = 1;
+        }
+
+        if ($coverage) {
+            self::$castorBin = __DIR__ . '/bin/castor';
+            $testName = debug_backtrace()[1]['class'] . '::' . debug_backtrace()[1]['function'];
+            $outputFilename = stream_get_meta_data(tmpfile())['uri'];
+            $extraEnv['CC_OUTPUT_FILENAME'] = $outputFilename;
+            $extraEnv['CC_TEST_NAME'] = $testName;
+        }
+
+        $workingDirectory = $cwd ? str_replace('{{ base }}', __DIR__ . '/..', $cwd) : __DIR__ . '/..';
+
+        $fs = new Filesystem();
+        if ($needResetCache) {
+            $fs->remove(self::$castorCacheDir);
+        }
+        if ($needResetVendor) {
+            $fs->remove($workingDirectory . '/.castor/vendor');
+        }
+
+        $inputStream = $input ? new InputStream() : null;
+
+        $process = new Process(
+            $this->getCommand($args),
+            cwd: $workingDirectory,
+            env: [
+                'COLUMNS' => 1000,
+                ...$extraEnv,
+                ...$env,
+            ],
+            input: $inputStream,
+        );
+
+        if ($inputStream) {
+            $process->start();
+
+            // Wait for the interactive prompt to appear before writing input, to
+            // avoid the race condition where the PTY I/O loop for the subprocess
+            // would consume the input from STDIN before the question is asked.
+            $outputBuffer = '';
+            if ($process->waitUntil(static function (string $type, string $data) use (&$outputBuffer): bool {
+                // Castor asks its own questions on the error output
+                $outputBuffer .= $data;
+
+                return str_contains($outputBuffer, ' > ');
+            })) {
+                $inputStream->write($input);
+            }
+            $inputStream->close();
+            $process->wait();
+        } else {
+            $process->run();
+        }
+
+        if ($coverage) {
+            $coverage->merge(require $outputFilename);
+        }
+
+        return $process;
+    }
+
+    public function assertStringEqualsFileWithCleaning(string $expectedFile, string $actualString, string $message = ''): void
+    {
+        $actualString = OutputCleaner::cleanOutput($actualString);
+        self::assertStringEqualsFile($expectedFile, $actualString, $message);
+    }
+
+    public function assertSameWithCleaning(string $expected, string $actualString, string $message = ''): void
+    {
+        self::assertSame($expected, OutputCleaner::cleanOutput($actualString), $message);
+    }
+
+    protected function getCommand(array $args): array
+    {
+        return [self::$castorBin, '--no-ansi', ...$args];
+    }
+}

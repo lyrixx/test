@@ -1,0 +1,166 @@
+<?php
+
+namespace Castor\Listener;
+
+use Castor\Console\Application;
+use Castor\Console\Input\CommandLine;
+use Castor\Exception\MinimumVersionRequirementNotMetException;
+use Castor\Helper\Installation;
+use Castor\Helper\InstallationMethod;
+use Castor\Helper\PlatformHelper;
+use Castor\Helper\ReleaseHelper;
+use JoliCode\PhpOsHelper\OsHelper;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
+use Symfony\Component\Console\Event\ConsoleCommandEvent;
+use Symfony\Component\Console\Event\ConsoleErrorEvent;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
+
+/** @internal */
+class UpdateCastorListener
+{
+    /**
+     * Grace period after a release before reminding the users to update, so a
+     * broken release can be fixed before everybody is told to install it.
+     */
+    public const string RELEASE_COOLDOWN = '3 days';
+
+    public function __construct(
+        private readonly CommandLine $commandLine,
+        private readonly ReleaseHelper $releaseHelper,
+        private readonly Installation $installation,
+        #[Autowire('%repacked%')]
+        private readonly bool $repacked,
+        private readonly LoggerInterface $logger = new NullLogger(),
+    ) {
+    }
+
+    // Must be before the command is executed, because we have to check for many
+    // command options
+    #[AsEventListener()]
+    public function checkUpdate(ConsoleCommandEvent $event): void
+    {
+        if ($this->repacked) {
+            return;
+        }
+
+        if (PlatformHelper::getEnv('DISABLE_VERSION_CHECK')) {
+            trigger_deprecation('jolicode/castor', '1.1.0', 'The "DISABLE_VERSION_CHECK" environment var is deprecated, use "CASTOR_DISABLE_VERSION_CHECK" instead.');
+
+            return;
+        }
+
+        if (PlatformHelper::getEnv('CASTOR_DISABLE_VERSION_CHECK')) {
+            return;
+        }
+
+        if (PlatformHelper::isRunningInAgentContext()) {
+            return;
+        }
+
+        if ($this->commandLine->isSelfUpdate()) {
+            return;
+        }
+
+        if ($this->commandLine->isOutputMachineReadable()) {
+            return;
+        }
+
+        $this->displayUpdateWarningIfNeeded($event->getInput(), $event->getOutput());
+    }
+
+    // Run this on exception to force the check
+    #[AsEventListener()]
+    public function forceCheckUpdate(ConsoleErrorEvent $event): void
+    {
+        $error = $event->getError();
+
+        if ($error instanceof MinimumVersionRequirementNotMetException) {
+            $this->displayUpdateWarningIfNeeded($event->getInput(), $event->getOutput(), false);
+        }
+    }
+
+    private function displayUpdateWarningIfNeeded(InputInterface $input, OutputInterface $output, bool $useCache = true): void
+    {
+        if (Application::isSnapshot()) {
+            $this->displaySnapshotUpdateWarningIfNeeded($input, $output, $useCache);
+
+            return;
+        }
+
+        $latestVersion = $this->releaseHelper->getLatest($useCache);
+
+        if (!$latestVersion) {
+            return;
+        }
+
+        if (version_compare($latestVersion['tag_name'], Application::VERSION, '<=')) {
+            return;
+        }
+
+        // A forced check (the castor file requires a newer version) skips the cooldown
+        if ($useCache && isset($latestVersion['published_at']) && new \DateTimeImmutable($latestVersion['published_at']) > new \DateTimeImmutable('-' . self::RELEASE_COOLDOWN)) {
+            $this->logger->info(\sprintf('The Castor release %s is less than %s old, not suggesting to update yet.', $latestVersion['tag_name'], self::RELEASE_COOLDOWN));
+
+            return;
+        }
+
+        $symfonyStyle = new SymfonyStyle($input, $output)->getErrorStyle();
+
+        $symfonyStyle->block(\sprintf('<info>A new Castor version is available</info> (<comment>%s</comment>, currently running <comment>%s</comment>).', $latestVersion['tag_name'], Application::VERSION), escape: false);
+
+        $installationMethod = $this->installation->getMethod();
+
+        if (\in_array($installationMethod, [InstallationMethod::Phar, InstallationMethod::Static], true)) {
+            if (OsHelper::isUnix()) {
+                $symfonyStyle->block('Run the following command to update Castor:');
+                $symfonyStyle->block('<comment>castor self-update</comment>', escape: false);
+            } else {
+                $latestReleaseUrl = $this->releaseHelper->getDownloadUrl($latestVersion);
+
+                if (!$latestReleaseUrl) {
+                    $this->logger->info('Failed to detect the correct release URL adapted to your system.');
+
+                    return;
+                }
+
+                $symfonyStyle->block(\sprintf('Download the latest version at <comment>%s</comment>', $latestReleaseUrl), escape: false);
+            }
+
+            $symfonyStyle->newLine();
+
+            return;
+        }
+
+        if (InstallationMethod::ComposerGlobal === $installationMethod) {
+            $symfonyStyle->block('Run the following command to update Castor:');
+            $symfonyStyle->block('<comment>castor self-update</comment>', escape: false);
+        }
+
+        if (InstallationMethod::Mise === $installationMethod) {
+            $symfonyStyle->block('Run the following command to update Castor:');
+            $symfonyStyle->block('<comment>mise upgrade github:jolicode/castor</comment>', escape: false);
+        }
+    }
+
+    private function displaySnapshotUpdateWarningIfNeeded(InputInterface $input, OutputInterface $output, bool $useCache): void
+    {
+        $snapshot = $this->releaseHelper->getRelease(ReleaseHelper::SNAPSHOT_TAG, $useCache);
+
+        // The snapshot pre-release is named after the version it was built from
+        if (!$snapshot || ($snapshot['name'] ?? null) === Application::VERSION) {
+            return;
+        }
+
+        $symfonyStyle = new SymfonyStyle($input, $output)->getErrorStyle();
+
+        $symfonyStyle->block(\sprintf('<info>A new Castor snapshot is available</info> (<comment>%s</comment>, currently running <comment>%s</comment>).', $snapshot['name'], Application::VERSION), escape: false);
+        $symfonyStyle->block('Run the following command to update Castor:');
+        $symfonyStyle->block('<comment>castor self-update --snapshot</comment>', escape: false);
+        $symfonyStyle->newLine();
+    }
+}

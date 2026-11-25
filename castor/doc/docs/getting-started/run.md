@@ -1,0 +1,122 @@
+---
+description: >
+  Learn how to execute external processes in Castor using the `run()`,
+  `capture()`, and `exit_code()` functions, and how to manage process output
+  and interactivity.
+---
+
+# Executing Processes
+
+This document explains how to execute external processes in Castor, manage their
+output, and handle interactivity.
+
+## The `run()` function
+
+Castor provides a `run()` function to execute external processes.
+
+```php
+{{ php("examples/basic/run/run.php") }}
+```
+
+You can pass a string or an array of string for this function. When passing a
+string, arguments will not be escaped - use it carefully.
+
+## Process object
+
+Under the hood, Castor uses the
+[`Symfony\Component\Process\Process`](https://github.com/symfony/symfony/blob/6.3/src/Symfony/Component/Process/Process.php)
+object to execute the process. The `run()` function will return this object. So
+you can use the API of this class to interact with the underlying process:
+
+```php
+{{ php("examples/basic/run/ls.php") }}
+```
+
+> [!NOTE]
+> Without the allowFailure option, Castor would throw an exception if the process
+> execution failed. See [this documentation](context.md#failure) for more
+> information about failure handling.
+
+## Processing the output
+
+By default, Castor will forward the stdout and stderr to the current terminal.
+If you do not want to print the process output you can use a context with the
+`quiet` option to true:
+
+```php
+{{ php("examples/basic/run/quiet.php") }}
+```
+
+### The `capture()` function
+
+Castor provides a `capture()` function that will run the process quietly,
+trims the output, then returns it:
+
+```php
+{{ php("examples/basic/run/capture.php") }}
+```
+
+### The `exit_code()` function
+
+Castor provides a `exit_code()` function that will run the command, allowing
+the process to fail and return its exit code. This is particularly useful when
+running tasks on CI as this allows the CI to know if the task failed or not:
+
+```php
+{{ php("examples/basic/run/exit_code.php") }}
+```
+
+## Interactive Process
+
+If you want to run an interactive process, you can transform any context into an interactive one:
+
+```php
+{{ php("examples/basic/run/interactive.php") }}
+```
+
+## PTY & TTY
+
+By default, Castor will use a pseudo terminal (PTY) to run the underlying process,
+which allows to have nice output in most cases.
+For some commands you may want to disable the PTY and use a TTY instead. You can
+do that by setting the `tty` option to `true`:
+
+```php
+{{ php("examples/basic/run/tty.php") }}
+```
+
+> [!WARNING]
+> When using a TTY, the output of the command is empty in the process object
+> (when using `getOutput()` or `getErrorOutput()`).
+
+You can also disable the PTY by setting the `pty` option to `false`. If `pty`
+and `tty` are both set to `false`, the standard input will not be forwarded to
+the process:
+
+```php
+{{ php("examples/basic/run/pty.php") }}
+```
+
+> [!NOTE]
+> The PTY gets the size of the terminal of Castor when the command starts, but
+> does not follow its resizing: prefer a TTY for a full screen command (`vim`,
+> `top`, ...).
+
+## Providing input to a process
+
+You can provide input to a process via stdin using the `input` option on the
+context. This is useful for commands that require input but you don't want to
+expose sensitive data (like passwords) in command line arguments:
+
+```php
+{{ php("examples/basic/run/input.php") }}
+```
+
+The `input` option accepts a string, a `\Stringable`, a resource, or an
+`\Iterator<string>`.
+
+> [!WARNING]
+> Environment variables set with `withEnvironment()` are not a safe place for
+> secrets either: they are displayed, with their values, when the process fails
+> and in the verbose logs. See the [context
+> documentation](context.md#environment-variables).

@@ -1,0 +1,129 @@
+<?php
+
+namespace Castor\Console\Command;
+
+use Castor\Exception\LlmException;
+use Castor\Helper\PlatformHelper;
+use Castor\Llm\Cli;
+use Castor\Llm\CliRegistry;
+use Castor\Llm\ConfigStorage;
+use Castor\Llm\LlmRunner;
+use Castor\Llm\Selection;
+use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Attribute\Option;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Formatter\OutputFormatter;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Process\Process;
+
+/** @internal */
+#[AsCommand(
+    name: 'castor:llm:debug',
+    description: 'Shows which LLM CLI Castor uses, and why',
+)]
+final readonly class LlmDebugCommand
+{
+    public function __construct(
+        // The services need the console input and output, which do not exist yet when the commands are registered
+        #[Autowire(lazy: true)]
+        private CliRegistry $clis,
+        // The services need the console input and output, which do not exist yet when the commands are registered
+        #[Autowire(lazy: true)]
+        private ConfigStorage $configStorage,
+        // The services need the console input and output, which do not exist yet when the commands are registered
+        #[Autowire(lazy: true)]
+        private LlmRunner $llmRunner,
+    ) {
+    }
+
+    public function __invoke(
+        SymfonyStyle $io,
+        #[Option(description: 'Send a prompt to check the LLM CLI answers')]
+        bool $test = false,
+    ): int {
+        $io->section('LLM CLIs');
+
+        $io->table(['CLI', 'Status', 'Model option', 'Agent option'], array_map(function (Cli $cli): array {
+            $path = $this->clis->getPath($cli);
+
+            return [
+                $cli->name,
+                match (true) {
+                    null === $path => '<comment>not installed</comment>',
+                    $cli->mayModifyProject => \sprintf('<info>installed</info> (%s), may modify the project even with llm_ask()', $path),
+                    default => \sprintf('<info>installed</info> (%s)', $path),
+                },
+                $cli->modelOption ?? '',
+                $cli->agentOption ?? '',
+            ];
+        }, $this->clis->all()));
+
+        $io->section('Configuration');
+
+        $notSet = '<comment>not set</comment>';
+        $env = PlatformHelper::getEnv(LlmRunner::ENV_VAR);
+
+        $io->table(['Source', 'Value'], [
+            [\sprintf('%s environment variable', LlmRunner::ENV_VAR), false !== $env && '' !== trim($env) ? OutputFormatter::escape($env) : $notSet],
+            ['Configuration of the project', null !== ($value = $this->configStorage->get(global: false)) ? OutputFormatter::escape($value) : $notSet],
+            ['Global configuration', null !== ($value = $this->configStorage->get(global: true)) ? OutputFormatter::escape($value) : $notSet],
+            ['Default', Selection::MODE_CHOOSE],
+        ]);
+
+        try {
+            [$selection, $source] = $this->llmRunner->resolve();
+        } catch (LlmException $e) {
+            $io->error($e->getMessage());
+
+            return Command::FAILURE;
+        }
+
+        $io->text(\sprintf('Castor will <info>%s</info>, from %s.', OutputFormatter::escape($selection->describe()), $source));
+
+        if ($selection->isFixed()) {
+            $describe = static fn (string|array $command): string => \sprintf('<comment>%s</comment>%s', OutputFormatter::escape(\is_array($command) ? new Process($command)->getCommandLine() : $command), \is_array($command) && \in_array(Cli::PROMPT_PLACEHOLDER, $command, true) ? '' : ', with the prompt on its standard input');
+
+            if (null === $selection->cli) {
+                $io->text(\sprintf('The command is %s.', $describe($selection->buildReadOnlyCommand())));
+            } else {
+                try {
+                    $environment = $this->clis->getReadOnlyEnvironment($selection->cli);
+                } catch (LlmException $e) {
+                    $io->error($e->getMessage());
+
+                    return Command::FAILURE;
+                }
+
+                $io->text(\sprintf('The command of llm_ask() is %s%s.', $describe($selection->buildReadOnlyCommand()), $environment ? \sprintf(', with the environment variables <comment>%s</comment>', implode(', ', array_keys($environment))) : ''));
+                $io->text($selection->cli->supportsWrite()
+                    ? \sprintf('The command of llm_run() is %s.', $describe($selection->buildWriteCommand()))
+                    : \sprintf('<error>The "%s" LLM CLI cannot modify the project: llm_run() will fail.</error>', $selection->cli->name));
+            }
+        }
+
+        $io->newLine();
+        $io->text(\sprintf('Run "castor castor:llm:configure" to change it, or set the %s environment variable for a single run.', LlmRunner::ENV_VAR));
+
+        if (!$test) {
+            return Command::SUCCESS;
+        }
+
+        $io->section('Test');
+
+        $start = microtime(true);
+
+        try {
+            $answer = $this->llmRunner->ask('Which LLM model are you? Answer in one short sentence.');
+        } catch (LlmException $e) {
+            $io->error($e->getMessage());
+
+            return Command::FAILURE;
+        }
+
+        $io->text(OutputFormatter::escape($answer));
+        $io->success(\sprintf('"%s" answered in %.1f seconds.', $this->llmRunner->getLastSelection()?->getName() ?? '?', microtime(true) - $start));
+
+        return Command::SUCCESS;
+    }
+}

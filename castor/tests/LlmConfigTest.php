@@ -1,0 +1,62 @@
+<?php
+
+namespace Castor\Tests;
+
+class LlmConfigTest extends TaskTestCase
+{
+    private const CWD = '{{ base }}/tests/fixtures/valid/llm';
+
+    public function testAPromptThatIsNotValidUtf8CanBeAnArgument(): void
+    {
+        $process = $this->runTask(['ask-in-argument'], self::CWD);
+
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertStringContainsString('The answer is 42.', $process->getOutput());
+    }
+
+    public function testTheConfigurationDrivesTheLlmFunction(): void
+    {
+        // A fake "claude" CLI is the only known CLI installed. If it were not
+        // executable, the real one of the PATH would run, in write mode
+        $this->assertTrue(is_executable(__DIR__ . '/fixtures/valid/llm/bin/claude'), 'The fake "claude" CLI must be executable.');
+        $env = ['PATH' => __DIR__ . '/fixtures/valid/llm/bin:' . getenv('PATH')];
+
+        // The configuration of the project chooses a custom command
+        $process = $this->runTask(['castor:llm:configure', 'sh ./fake-llm.sh project'], self::CWD);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertStringContainsString('Castor will always run the command "sh ./fake-llm.sh project", for this project.', $process->getOutput());
+
+        $process = $this->runTask(['ask-default'], self::CWD, needResetCache: false);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertSame("You asked: What is the answer?\nThe answer is 42. (project)\n", $process->getOutput());
+
+        // The environment variable wins over the configuration
+        $process = $this->runTask(['ask-default'], self::CWD, needResetCache: false, env: ['CASTOR_LLM' => 'sh ./fake-llm.sh env']);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertSame("You asked: What is the answer?\nThe answer is 42. (env)\n", $process->getOutput());
+
+        // A known CLI is found in the PATH
+        $process = $this->runTask(['ask-default'], self::CWD, needResetCache: false, env: [...$env, 'CASTOR_LLM' => 'claude']);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertSame("You asked: What is the answer?\nThe answer is 42. (claude)\n", $process->getOutput());
+
+        // llm_run() uses the write mode of the CLI
+        $process = $this->runTask(['run-default'], self::CWD, needResetCache: false, env: [...$env, 'CASTOR_LLM' => 'claude']);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertSame("You asked: Fix the typos.\nThe answer is 42. (claude, write)\n", $process->getOutput());
+
+        // The debug command tells where the value comes from
+        $process = $this->runTask(['castor:llm:debug'], self::CWD, needResetCache: false);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertStringContainsString('Castor will always run the command "sh ./fake-llm.sh project", from the configuration of the project.', $process->getOutput());
+
+        // Without any configuration, Castor asks which CLI to use, which a non-interactive run cannot answer
+        $process = $this->runTask(['castor:llm:configure', '--reset'], self::CWD, needResetCache: false);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertStringContainsString('The LLM configuration of this project has been removed.', $process->getOutput());
+
+        $process = $this->runTask(['ask-default'], self::CWD, needResetCache: false, env: $env);
+        $this->assertSame(1, $process->getExitCode());
+        $this->assertStringContainsString('Castor needs you to choose the LLM CLI (from the default), but the run is not interactive.', $process->getErrorOutput());
+    }
+}

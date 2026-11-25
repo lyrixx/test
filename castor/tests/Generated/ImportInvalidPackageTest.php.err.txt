@@ -1,0 +1,5 @@
+In castor.php line XXXX:
+
+  The scheme "package://" is not supported, only "composer://" is.
+
+

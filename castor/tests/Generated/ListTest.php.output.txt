@@ -1,0 +1,156 @@
+completion                                               Dump the shell completion script
+hello
+help                                                     Display help for a command
+list                                                     List commands
+no-namespace                                             Task without a namespace
+shebang-task
+update                                                   Update all dependencies
+archive:zip                                              Compress files into a zip archive using native binary or fallback to ZipArchive php class
+archive:zip-binary                                       Compress files into a zip archive using native binary
+archive:zip-php                                          Compress files into a zip archive using ZipArchive php class
+arguments:args-after-end-option                          Dumps all arguments and options after "--" without configuration nor validation
+arguments:arguments                                      Dumps all arguments and options, with custom configuration
+arguments:auto-configuration                             Dumps all arguments and options, without configuration
+arguments:autocomplete                                   Provides autocomplete for an argument
+arguments:autocomplete-path                              Provides autocomplete for a path argument
+arguments:no-validation
+arguments:option-mode
+arguments:optional
+arguments:override-argument
+arguments:override-option
+arguments:passthru                                       Dumps all arguments and options, without configuration nor validation
+arguments:passthru-after-endoption                       Dumps all arguments and options after the end of options marker (--).
+arguments:path-argument
+arguments:path-option-with-filter                        Provides autocomplete for .yaml files in the config directory
+arguments:phpunit
+arguments:simple
+assertion:ensure-we-are-in-the-future                    Ensure we are in the future
+assertion:throw-an-exception                             Throws a Problem exception
+cache:complex                                            Cache with usage of CacheItemInterface
+cache:simple                                             Cache a simple call
+castor:composer                                          Interact with built-in Composer for castor
+castor:doc:build                                         Build documentation
+castor:doc:build-assets                                  Fetch external assets and build command help files
+castor:doc:docker-build                                  Build docs docker image
+castor:doc:serve                                         Serve documentation and watches for changes
+castor:execute                                           Execute a remote task from a packagist directory
+castor:llm:configure                                     Configures which LLM CLI Castor uses
+castor:llm:debug                                         Shows which LLM CLI Castor uses, and why
+castor:markdown:lint                                     Lint markdown files
+castor:phar:build                                        Build phar for all systems
+castor:phar:darwin                                       Build phar for MacOS system
+castor:phar:install                                      install dependencies
+castor:phar:linux                                        Build phar for Linux system
+castor:phar:update                                       update dependencies
+castor:phar:windows                                      Build phar for Windows system
+castor:release:release                                   Release a new version of castor
+castor:self-update                                       Updates Castor to the latest version
+castor:static:cache-dir                                  Print the directory where the PHP build of a system is cached (used by the CI)
+castor:static:darwin-amd64                               Build static binary for MacOS (amd64) system
+castor:static:darwin-arm64                               Build static binary for MacOS (arm64) system
+castor:static:linux-amd64                                Build static binary for Linux (amd64) system
+castor:static:linux-arm64                                Build static binary for Linux (arm64) system
+castor:static:windows-amd64                              Build static binary for Windows (amd64) system
+castor:watcher:build                                     Build watcher for all systems
+castor:watcher:darwin                                    Build watcher for MacOS system
+castor:watcher:linux                                     Build watcher for Linux system
+castor:watcher:windows                                   Build watcher for Windows system
+castor-example:foobar                                    Foobar from the example plugin!
+castor-example:hello                                     Hello from the example plugin!
+command-builder:ls                                       Run a sub-process and display information about it
+configuration:bar:bar                                    Prints bar, but also executes foo
+configuration:foo:foo                                    Prints foo
+configuration:renamed                                    Task that was renamed
+context:context                                          Displays information about the context
+context:display-context-info-with                        Displays information about the context, using a specific context
+context:display-dynamic-context-info                     Displays information about the context
+crypto:decrypt                                           Decrypt content with a password
+crypto:decrypt-file                                      Decrypt file with a password
+crypto:encrypt                                           Encrypt content with a password
+crypto:encrypt-file                                      Encrypt file with a password
+event-listener:before-execute-task                       A dummy task with before execute task event listener
+event-listener:console-terminate                         A dummy task with console terminate event listener
+event-listener:dispatch-event                            Dispatch a custom event and collect data from its listeners
+event-listener:loggable                                  A dummy task to demonstrate accessing attributes of a task
+event-listener:multiple                                  A dummy task with many event listeners attached
+event-listener:priority                                  A dummy task with event listeners that have priority
+event-listener:process                                   A dummy task with process event listeners
+fingerprint:exist-and-save                               Check if the fingerprint has changed before executing some code
+fingerprint:fingerprint                                  Execute a callback only if the fingerprint has changed
+fingerprint:force                                        Check if the fingerprint has changed before executing a callback (with force option)
+fingerprint:global                                       Execute a callback only if the global fingerprint has changed (Shared across all projects)
+foo:bar                                                  Configures the default name, namespace, and description
+foo1:hello1
+foo2:hello2
+http:download                                            Download a file through HTTP
+http:request                                             Make HTTP request
+io:io                                                    Plays with Symfony Style
+io:term                                                  Get terminal properties
+llm:fix-readme-typos                                     Fix the typos of the README with an LLM
+llm:summarize-commits                                    Summarize the last commits with an LLM
+log:all-level                                            Logs some messages with different levels
+log:error                                                Logs an "error" message
+log:info                                                 Logs an "info" message
+log:with-context                                         Logs an "error" message
+notify:custom-title                                      Sends a notification with a custom title
+notify:notify                                            Sends a notification
+notify:on-run-finished                                   Sends a notification when the task finishes
+open:documentation                                       Open Castor documentation in the default browser
+open:multiple                                            Open an URL and a file in the default applications
+parallel:embed                                           Sleeps for 5, 7, and 10 seconds in parallel
+parallel:exception                                       Sleep and throw an exception
+parallel:jobs                                            Runs named jobs in parallel, and organizes their output
+parallel:sleep                                           Sleeps for 3 and 4 seconds in parallel
+phar:phar                                                Run a phar in a sub process
+qa:cs:cs                                                 Fix CS
+qa:cs:install                                            install dependencies
+qa:cs:update                                             Update dependencies
+qa:phpstan:install                                       install dependencies
+qa:phpstan:phpstan                                       Run PHPStan
+qa:phpstan:update                                        update dependencies
+remote-import:autoload                                   Can invoke autoloaded files from castor.composer.json
+remote-import:import-class                               Use a class that extends a class imported from a remote package
+remote-import:remote-tasks                               Use functions of a remote package
+run:allow-failure                                        A failing task authorized to fail
+run:capture                                              Run a sub-process and display information about it, with capture() function
+run:env-override                                         Display environment variables
+run:exception                                            Run a command that will fail
+run:exit-code                                            Run a sub-process and return its exit code, with exit_code() function
+run:failure                                              A failing task not authorized to fail
+run:interactive
+run:ls                                                   Run a sub-process and display information about it
+run:process-helper                                       Run a sub-process and display information about it, with ProcessHelper
+run:pty                                                  Run a command with PTY disabled
+run:quiet                                                Executes something but does not output anything
+run:run                                                  Run a sub-process
+run:run-with-input                                       Run a sub-process with stdin input
+run:tty                                                  Run a command with TTY enabled
+run:variables                                            Run a sub-process with environment variables and display information about it
+run:verbose-arguments                                    A failing task that will suggest to re-run with verbose arguments
+run:working-directory-override                           Changes directory
+signal:sigusr2                                           Captures SIGUSR2 signal
+signal:trap                                              Traps SIGINT and forwards it to the running process
+signal:trap-with-on-signals                              Combines a trapped signal and an "onSignals" handler
+slug:slugify                                             Slugify strings
+ssh:download                                             Downloads a file from the remote server
+ssh:ls                                                   Lists content of /var/www directory on the remote server
+ssh:real-time-output                                     Output in real-time ssh command output
+ssh:upload                                               Uploads a file to the remote server
+ssh:whoami                                               Connect to a remote server without specifying a user
+symfony:greet
+symfony:hello                                            Says hello from a symfony application
+usage:about                                              Displays some help for the current project
+usage:with:long:namespace:hello
+version-guard:min-version-check                          Check if the minimum castor version requirement is met
+version-guard:min-version-check-fail                     Check if the minimum castor version requirement is met (fail)
+wait-for:callback                                        Use custom wait for, to check anything
+wait-for:docker                                          Wait for docker container to be ready
+wait-for:port                                            Wait for a service available on a port
+wait-for:url                                             Wait for an URL to be available
+wait-for:url-with-specific-response-content-and-status   Wait for an URL to respond with a "200" status code and a specific content
+wait-for:url-with-status-code-only                       Wait for an URL to respond with a specific status code only
+watch:filesystem                                         Watches on filesystem changes
+watch:parallel-change                                    Watches on filesystem changes with 2 watchers in parallel
+watch:stop                                               Watches on filesystem changes and stop after first change
+yaml:dump                                                Dump a YAML content
+yaml:parse                                               Parse a YAML content

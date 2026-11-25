@@ -1,0 +1,588 @@
+---
+description: >
+  Learn how to use and create contexts in Castor to manage environments,
+  variables, and process execution settings for your tasks.
+---
+
+# Context
+
+For every task that Castor run, it uses a `Context` object. This object
+contains the default values for a bunch of built-in functions like `run()`, `watch()`,
+`capture()`, etc.
+It configures working directory of the command, environment variables, PTY, TTY,
+timeout, etc...
+
+It also contains custom values that can be set by the user and reused in tasks.
+
+The context is immutable, which means that every time you change a value, a new
+context is created.
+
+## Using the context
+
+### The `context()` function
+
+You can get the initial context thanks to the `context()` function:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\io;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    $context = context();
+
+    io()->writeln($context->workingDirectory); // will print the directory of the castor.php file
+
+    $context = $context->withWorkingDirectory('/tmp'); // will create a new context where the current directory is /tmp
+    run('pwd', context: $context); // will print "/tmp"
+}
+```
+
+### The working directory
+
+By default, only `run()` executes in the working directory of the context.
+Everything else, `fs()`, `finder()` and the raw PHP functions such as `mkdir()`
+or `file_get_contents()`, resolves relative paths from the directory you called
+`castor` from.
+
+You can opt in to a single, consistent behavior by defining a constant at the top
+of your `castor.php` file:
+
+```php
+defined('CASTOR_USE_CHDIR') || define('CASTOR_USE_CHDIR', true);
+```
+
+The guard matters as soon as several `castor.php` files run in the same process:
+a mounted project, an imported file or a `composer://` package may define the
+constant too, and a second bare `define()` would raise
+`Constant CASTOR_USE_CHDIR already defined`.
+
+Castor then changes the current directory of its own process to the working
+directory of the context, so relative paths mean the same thing everywhere,
+whatever directory you called `castor` from. This also applies while a
+`with(workingDirectory: ...)` block runs, and the previous directory is restored
+when it ends:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\io;
+use function Castor\with;
+
+#[AsTask()]
+function foo(): void
+{
+    io()->writeln(getcwd()); // the directory of the castor.php file
+
+    with(static function () {
+        io()->writeln(getcwd()); // "/tmp"
+        file_put_contents('foo.txt', 'bar'); // writes "/tmp/foo.txt"
+    }, workingDirectory: '/tmp');
+
+    io()->writeln(getcwd()); // the directory of the castor.php file, again
+}
+```
+
+> [!NOTE]
+> This becomes the default in Castor 2.0. Until then, Castor emits a deprecation
+> when the constant is not defined. Define it to `false` to keep the current
+> behavior without the deprecation.
+
+### The `variable()` function
+
+Castor also provides a `variable()` function to get the value of a variable
+stored in the `Context`:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\variable;
+
+#[AsTask()]
+function foo(): void
+{
+    $foobar = variable('foobar', 'default value');
+
+    // Same as:
+    $context = context();
+    try {
+        $foobar = $context['foobar'];
+    } catch (\OutOfBoundsException) {
+        $foobar = 'default value;
+    }
+}
+```
+
+### Typing the context data
+
+Castor cannot know the shape of your context data, so `Context::$data` and
+`variable()` are described by a PHPStan [type
+alias](https://phpstan.org/writing-php-code/phpdoc-types#global-type-aliases)
+named `ContextData`. It defaults to `array<string, mixed>`, which means
+`variable()` returns `mixed` out of the box.
+
+If you use PHPStan, you can redeclare that alias in your own `phpstan.neon` to
+describe your own variables:
+
+```neon
+parameters:
+    typeAliases:
+        ContextData: '''
+            array{
+                name: string,
+                production: bool,
+                foo?: string,
+            }
+        '''
+```
+
+`variable()` then returns precise types instead of `mixed`:
+
+```php
+$name = variable('name');                // string
+$production = variable('production');    // bool
+$unknown = variable('unknown', 42);      // int, inferred from the default value
+```
+
+Your declaration takes precedence over the default one, so there is nothing
+else to remove or disable.
+
+> [!NOTE]
+> The default alias lives in `extension.neon` at the root of the Castor
+> package. It is registered automatically if you use
+> [phpstan/extension-installer](https://github.com/phpstan/extension-installer).
+> Otherwise, include it by hand:
+>
+> ```neon
+> includes:
+>     - vendor/jolicode/castor/extension.neon
+> ```
+>
+> When you run Castor as a phar or as a standalone binary there is no
+> `vendor/jolicode/castor` directory: declare the alias yourself, either with your
+> own shape or with the permissive default `ContextData: 'array<string, mixed>'`.
+
+## Creating a new context
+
+You can create a new context by declaring a function with
+the `Castor\Attribute\AsContext` attribute:
+
+```php
+use Castor\Attribute\AsContext;
+use Castor\Attribute\AsTask;
+use Castor\Context;
+
+use function Castor\run;
+
+#[AsContext()]
+function my_context(): Context
+{
+    return new Context(environment: ['FOO' => 'BAR']);
+}
+
+#[AsTask()]
+function foo(): void
+{
+    run('echo foo=$FOO');
+}
+```
+
+> [!NOTE]
+> If you only define one context in your project, it will be used by default for
+> all tasks.
+> See the next chapter to learn how to set a default context.
+
+So when you run the `foo` task, you will get:
+
+```console
+$ castor foo
+foo=BAR
+```
+
+## Working with several contexts
+
+Defining multiple contexts can be useful to represent different environments
+(e.g. `dev`, `staging`, `prod`, etc.) or different configurations (e.g. `docker`, `local`, etc.).
+
+You can define as many contexts as you want in your project by declaring multiple
+functions with the `#[AsContext]` attribute:
+
+```php
+use Castor\Attribute\AsContext;
+use Castor\Context;
+
+#[AsContext()]
+function dev_context(): Context
+{
+    return new Context(environment: ['APP_ENV' => 'dev']);
+}
+
+#[AsContext()]
+function test_context(): Context
+{
+    return new Context(environment: ['APP_ENV' => 'test']);
+}
+```
+
+You can then choose which context to use when running a task by using the
+`--context` option:
+
+```bash
+castor foo --context=dev_context
+```
+
+> [!TIP]
+> The `-c` option is a shortcut for the `--context` option in order to make it
+> easier to type.
+
+```bash
+castor foo -c dev_context
+```
+
+### Overriding the context name
+
+You can override the context name by setting the `name` argument of the
+`#[AsContext]` attribute:
+
+```php
+use Castor\Attribute\AsContext;
+use Castor\Context;
+
+use function Castor\run;
+
+#[AsContext(name: 'dev')]
+function dev_context(): Context
+{
+    return new Context(environment: ['APP_ENV' => 'dev']);
+}
+```
+
+### Setting a default context
+
+You may want to set a default context for all your tasks. You can do that by
+setting the `default` argument to `true` in the `#[AsContext]` attribute:
+
+```php
+use Castor\Attribute\AsContext;
+use Castor\Attribute\AsTask;
+use Castor\Context;
+
+use function Castor\run;
+
+#[AsContext(default: true, name: 'default')]
+function default_context(): Context
+{
+    return new Context();
+}
+
+#[AsContext(name: 'my_context')]
+function other_context(): Context
+{
+    return new Context(environment: ['FOO' => 'BAR']);
+}
+
+#[AsTask()]
+function foo(): void
+{
+    run('echo foo=$FOO');
+}
+```
+
+By default the `foo` task will only print `foo=` as the `FOO` environment
+variable is not set:
+
+```console
+$ castor foo
+foo=
+```
+
+If you want to use your other context, you can use the `--context` option:
+
+```console
+$ castor foo --context=my_context
+foo=BAR
+```
+
+> [!NOTE]
+> You can also define the environment variable `CASTOR_CONTEXT` at runtime to
+> override the default context to be used when no `--context` option is
+> provided.
+
+```bash
+CASTOR_CONTEXT=my_context castor foo
+```
+
+### Using a `.castor.context` file
+
+You can also create a `.castor.context` file at the root of your project
+(next to `castor.php`) to set the context for all team members or CI runs
+without touching environment variables:
+
+```text
+my_context
+```
+
+The file must contain a single line with the name of a valid context.
+If the context name is unknown, Castor will log an error and fall back to
+the default context.
+
+The context selection precedence is, from highest to lowest:
+
+1. `--context` CLI option
+2. `CASTOR_CONTEXT` environment variable
+3. `.castor.context` file
+4. The context marked `default: true`
+
+> [!TIP]
+> The `.castor.context` file is useful when you want to commit a default
+> context for your project (e.g. `production`) while still allowing each
+> developer to override it locally via the `--context` flag or the
+> `CASTOR_CONTEXT` environment variable. Add it to `.gitignore` if you
+> want each developer to manage their own local context.
+
+## Context features
+
+### Failure
+
+By default, Castor will throw an exception if the process fails. You can disable
+that by using the `withAllowFailure` method:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    run('a_command_that_does_not_exist', context: context()->withAllowFailure());
+}
+```
+
+A process interrupted by a `CTRL+C` still stops the task: see
+[the signals documentation](../going-further/interacting-with-castor/signals.md#interrupting-a-task).
+
+### Working directory
+
+By default, Castor will execute the process in the same directory as
+the `castor.php` file. You can change that by using the `withWorkingDirectory`
+method. It can be either a relative or an absolute path:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    run('pwd', context: context()->withWorkingDirectory('../')); // run the process in the parent directory of the castor.php file
+    run('pwd', context: context()->withWorkingDirectory('/tmp')); // run the process in the /tmp directory
+}
+```
+
+### Environment variables
+
+By default, Castor will use the same environment variables as the current
+process. You can add or override environment variables by using the
+`withEnvironment()` method:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    run('echo $FOO', context: context()->withEnvironment(['FOO' => 'bar'])); // will print "bar"
+}
+```
+
+> [!WARNING]
+> The environment variables of the context are displayed, with their values,
+> in the command Castor reports when a process fails, and in the verbose logs
+> (`-v`). Keep secrets out of `withEnvironment()` when that output can be read
+> by others, in CI logs for instance. Variables inherited from the parent
+> process (exported in your shell, or loaded with `load_dot_env()`) are passed
+> to the process too, but are never displayed.
+
+### Timeout
+
+By default, Castor allow your `run()` calls to go indefinitly.
+
+If you want to tweak that you need to use the `withTimeout` method.
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    run('my-script.sh', context: context()->withTimeout(120));
+}
+```
+
+This process will have a 2 minutes timeout.
+
+### PTY & TTY
+
+By default, Castor will use a pseudo terminal (PTY) to run the underlying process,
+which allows to have nice output in most cases.
+For some commands, you may want to disable the PTY and use a TTY instead. You can
+do that by using the `withTty` method:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    run('echo "bar"', context: context()->withTty());
+}
+```
+
+> [!WARNING]
+> When using a TTY, the output of the command is empty in the process object
+> (when using `getOutput()` or `getErrorOutput()`).
+
+You can also disable the pty by using the `withPty` method. If `withTty`
+and `withPty` are both used with `false`, the standard input will not be forwarded to
+the process:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    run('echo "bar"', context: context()->withPty(false)->withTty(false)); // print nothing
+}
+```
+
+> [!NOTE]
+> The PTY gets the size of the terminal of Castor when the command starts, but
+> does not follow its resizing: prefer a TTY for a full screen command (`vim`,
+> `top`, ...).
+
+### Trapping signals
+
+By default, a signal sent to Castor - like the `SIGINT` triggered by a `CTRL+C` -
+stops Castor itself. You can ask Castor to trap some signals and forward them to
+the process it runs, with the `withTrappedSignals` method:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    // A CTRL+C stops the server, but not the task
+    run('./my-server', context: context()->withTrappedSignals()->withAllowFailure());
+
+    run('echo "the server has been stopped"');
+}
+```
+
+Without any argument, this method traps `SIGINT` and `SIGTERM`. You can also
+pass the list of signals you want to trap, like
+`withTrappedSignals([\SIGINT, \SIGQUIT])`. `SIGKILL` and `SIGSTOP` cannot be
+caught, and are rejected with an `InvalidArgumentException`.
+
+See [the signals documentation](../going-further/interacting-with-castor/signals.md#trapping-signals-sent-to-castor)
+for more information.
+
+### Interactive environment
+
+Some commands (a shell, `vim`, an interactive prompt, ...) only make sense
+when Castor runs in an interactive environment. Castor auto-detects this and
+exposes it via `supportsInteraction()`:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function shell(): void
+{
+    $c = context();
+
+    if ($c->supportsInteraction()) {
+        $c = $c->toInteractive();
+    }
+
+    run('bash', context: $c);
+}
+```
+
+Auto-detection considers the environment **non-interactive** when:
+
+* the `CI` environment variable is set, or
+* `STDIN` is not attached to a TTY (piped input, AI agent runners, ...).
+
+You can also force the value yourself with `withSupportsInteraction()`, for
+example to flag your own AI agent runner:
+
+```php
+$c = context()->withSupportsInteraction(false);
+```
+
+Calling `toInteractive()` in a non-interactive environment throws a
+`LogicException` to prevent silent hangs. If you really want to force
+interactive flags anyway, pass `throwOnNonInteractiveEnv: false`:
+
+```php
+$c = context()->toInteractive(throwOnNonInteractiveEnv: false);
+```
+
+### Passing verbose arguments
+
+Castor allow you to pass verbose arguments (like the universal `-v` option) to
+the underlying process. You can do that by using the `withVerboseArguments` method:
+
+```php
+use Castor\Attribute\AsTask;
+
+use function Castor\context;
+use function Castor\run;
+
+#[AsTask()]
+function foo(): void
+{
+    run('php bin/console do:some:task', context: context()->withVerboseArguments(['--verbose']));
+}
+```
+
+By default, Castor will not pass any verbose arguments to the command. However,
+if you run castor [in verbose mode](../going-further/interacting-with-castor/log.md)
+(for example with `castor foo -v`), it will pass the verbose arguments you configured to this command.
+
+Additionally, if this command fails when Castor is not in verbose mode, it will
+ask you if you want to retry the command with the verbose arguments.
+
+## Advanced usage
+
+See [this documentation](../going-further/interacting-with-castor/advanced-context.md) for more usage about
+contexts.

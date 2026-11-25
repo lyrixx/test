@@ -1,0 +1,5 @@
+In castor.php line XXXX:
+
+  The file "path/to/not/existing/castor.php" does not exist.
+
+

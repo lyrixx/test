@@ -1,0 +1,16 @@
+.castor.stub.php
+/.php-cs-fixer.cache
+/.phpunit.cache
+/doc/assets/stylesheets/jolicode.css
+/examples/basic/archive/*.zip
+/my-app.*
+/tests/Examples/fixtures/**/.castor.stub.php
+/tests/fixtures/crypto
+/tools/release/artifacts/
+/tools/release/release-notes.md
+/var/
+/vendor/
+/castor.*
+!/castor.php
+!/castor.composer.json
+!/castor.composer.lock

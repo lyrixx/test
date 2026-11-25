@@ -1,0 +1,37 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Function arguments\\arguments\(\) has parameter \$word with no type specified\.$#'
+			identifier: missingType.parameter
+			count: 1
+			path: examples/basic/arguments/arguments.php
+
+		-
+			message: '#^Function arguments\\phpunit\(\) has parameter \$rawTokens with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: examples/basic/arguments/raw-tokens.php
+
+		-
+			message: '#^Negated boolean expression is always true\.$#'
+			identifier: booleanNot.alwaysTrue
+			count: 1
+			path: examples/basic/assertion/ensure.php
+
+		-
+			message: '#^Result of function usleep \(void\) is used\.$#'
+			identifier: function.void
+			count: 1
+			path: examples/basic/assertion/ensure.php
+
+		-
+			message: '#^Class RepackedApplication not found\.$#'
+			identifier: class.notFound
+			count: 1
+			path: src/Kernel.php
+
+		-
+			message: '#^Default value of the parameter \#1 \$data \(array\{\}\) of method Castor\\Context\:\:__construct\(\) is incompatible with type array\{name\: string, production\: bool, foo\?\: string\}\.$#'
+			identifier: parameter.defaultValue
+			count: 1
+			path: src/Context.php

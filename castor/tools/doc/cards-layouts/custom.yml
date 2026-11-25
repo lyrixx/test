@@ -1,0 +1,109 @@
+size: { width: 1200, height: 630 }
+layers:
+  - background:
+      color: "#FFF8E7"
+
+  # Mascot, bleeding out of the bottom right corner
+  - size: { width: 440, height: 438 }
+    offset: { x: 840, y: 180 }
+    background:
+      image: doc/assets/logo_CASTOR_mascot.svg
+
+  # Logo
+  - size: { width: 346, height: 90 }
+    offset: { x: 64, y: 56 }
+    background:
+      image: doc/assets/logo_CASTOR_line.svg
+
+  # Tagline
+  - size: { width: 400, height: 34 }
+    offset: { x: 440, y: 86 }
+    typography:
+      content: "The PHP Task Runner"
+      align: start
+      color: "#5E577A"
+      line:
+        amount: 1
+        height: 1
+      font:
+        family: Roboto
+        style: Regular
+
+  # Section, derived from the URL since page.ancestors is empty when cards are rendered
+  - size: { width: 740, height: 32 }
+    offset: { x: 64, y: 176 }
+    typography:
+      content: >-
+        {%- set crumbs = (page.url | trim('/') | split('/') | list)[:-1] | join('  /  ') | replace('-', ' ') -%}
+        {{ crumbs | upper }}
+      overflow: truncate
+      align: start
+      color: "#FF7300"
+      line:
+        amount: 1
+        height: 1
+      font:
+        family: Roboto
+        style: Bold
+
+  # Page title
+  - size: { width: 740, height: 230 }
+    offset: { x: 64, y: 226 }
+    typography:
+      content: "{{ page.meta.get('title', page.title) }}"
+      overflow: shrink
+      align: start bottom
+      color: "#1C153F"
+      line:
+        amount: 3
+        height: 1.2
+      font:
+        family: Roboto
+        style: Bold
+
+  # Page description
+  - size: { width: 740, height: 110 }
+    offset: { x: 64, y: 476 }
+    typography:
+      content: "{{ page.meta.get('description', config.site_description) or '' }}"
+      overflow: truncate
+      align: start
+      color: "#5E577A"
+      line:
+        amount: 3
+        height: 1.35
+      font:
+        family: Roboto
+        style: Regular
+
+  # Accent bar
+  - size: { width: 1200, height: 8 }
+    offset: { x: 0, y: 622 }
+    background:
+      color: "#FF7300"
+
+definitions:
+  - &page_title_with_site_name >-
+    {%- if page.url -%}
+      {{ page.meta.get("title", page.title) }} - {{ config.site_name }}
+    {%- else -%}
+      {{ page.meta.get("title", page.title) }}
+    {%- endif -%}
+
+  - &page_description >-
+    {{ page.meta.get("description", config.site_description) or "" }}
+
+tags:
+  og:type: website
+  og:title: *page_title_with_site_name
+  og:description: *page_description
+  og:image: "{{ image.url }}"
+  og:image:type: "{{ image.type }}"
+  og:image:width: "{{ image.width }}"
+  og:image:height: "{{ image.height }}"
+  og:url: "{{ page.canonical_url }}"
+
+  twitter:card: summary_large_image
+  twitter:title: *page_title_with_site_name
+  twitter:description: *page_description
+  twitter:image: "{{ image.url }}"

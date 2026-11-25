@@ -1,0 +1,48 @@
+<?php
+
+namespace Castor\Listener;
+
+use Castor\Console\Input\CommandLine;
+use Castor\Stub\StubsGenerator;
+use Symfony\Component\Console\Event\ConsoleCommandEvent;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
+
+/** @internal */
+class GenerateStubsListener
+{
+    public function __construct(
+        private readonly CommandLine $commandLine,
+        private readonly StubsGenerator $stubsGenerator,
+        #[Autowire('%repacked%')]
+        private readonly bool $repacked,
+        #[Autowire('%generate_stubs%')]
+        private readonly bool $generateStubs,
+        private readonly bool $hasCastorFile,
+    ) {
+    }
+
+    // Must be before the command is executed, because we have to check for many
+    // command options
+    #[AsEventListener()]
+    public function generateStubs(ConsoleCommandEvent $event): void
+    {
+        if ($this->repacked) {
+            return;
+        }
+
+        if (!$this->generateStubs) {
+            return;
+        }
+
+        if (!$this->hasCastorFile) {
+            return;
+        }
+
+        if ($this->commandLine->isShellCompletion() || $this->commandLine->isCompletionScript()) {
+            return;
+        }
+
+        $this->stubsGenerator->generateStubsIfNeeded();
+    }
+}
